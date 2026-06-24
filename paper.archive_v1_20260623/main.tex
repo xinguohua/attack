@@ -1,0 +1,72 @@
+\documentclass[letterpaper,twocolumn,10pt]{article}
+
+\usepackage{usenix-2020-09}
+
+% ---- Packages ----
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{subcaption}
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{multirow}
+
+% ---- Shared notation and theorem environments ----
+\input{math_commands}
+
+\begin{document}
+
+% ---- Title ----
+\title{SafeMimic: Dependency-Aware Adversarial Mimicry Attacks\\
+on Provenance Graph Intrusion Detection}
+
+\author{{\rm Anonymous Submission}\\
+Paper \#XXX}
+
+\maketitle
+
+% ---- Abstract ----
+\begin{abstract}
+Provenance graph-based host intrusion detection systems (HIDS) are widely
+deployed to detect advanced persistent threats (APTs). Recent mimicry attacks
+attempt to evade these detectors by inserting benign-looking operations into
+attack workflows. However, existing approaches face a fundamental dual failure:
+inserted operations may break attack functionality (the safety problem), and the
+evasion process itself creates detectable artifacts such as excess edges and
+skewed frequency distributions (the stealthiness problem). We present
+SafeMimic, a dependency-aware adversarial mimicry framework that formally
+addresses both problems simultaneously. SafeMimic first extracts the attack's
+resource dependency set and each candidate operation's effect set, constructing
+a provably safe pool of operations that cannot interfere with the attack. It
+then selects from this safe pool using KL-divergence minimization and temporal
+smoothing to match the target environment's normal behavior distribution. We
+prove that SafeMimic guarantees attack preservation (Safety Theorem) and show
+that the safe pool expands dynamically as the attack progresses. Evaluation on
+four APT attack scenarios from the DARPA Transparent Computing program demonstrates 100\% attack preservation, while
+experiments on three DARPA TC datasets (CADETS, THEIA, TRACE) show that SafeMimic
+achieves 0\% ML detection rate---a 95\% reduction in anomaly scores.
+Surprisingly, we find that ProvNinja's regularity-based camouflage
+\emph{backfires}, increasing ML detection from 94\% to 100\% by creating its
+own anomalous behavioral pattern.
+\end{abstract}
+
+% ---- Sections ----
+\input{sections/introduction}
+\input{sections/background}
+\input{sections/design}
+\input{sections/implementation}
+\input{sections/evaluation}
+\input{sections/related}
+\input{sections/discussion}
+\input{sections/conclusion}
+
+% ---- Bibliography ----
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}

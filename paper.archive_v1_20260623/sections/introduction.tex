@@ -1,0 +1,71 @@
+\section{Introduction}
+\label{sec:introduction}
+
+Advanced Persistent Threats (APTs) remain among the most damaging classes of cyber attacks, often persisting undetected in enterprise networks for months~\cite{provdetector,hrat}.
+To counter these threats, provenance-based Host Intrusion Detection Systems (HIDS) reconstruct system-level provenance graphs from audit logs and apply machine learning to identify malicious behavior~\cite{unicorn,shadewatcher,threatrace}.
+These systems have demonstrated strong detection capabilities: by modeling the causal relationships between processes, files, and network connections, they can surface attack campaigns that evade traditional signature-based defenses.
+
+However, the effectiveness of provenance-based HIDS has created an adversarial arms race.
+Recent work has explored \emph{mimicry attacks}---techniques that inject benign-looking operations into provenance graphs to disguise malicious behavior~\cite{provninja,malguise}.
+ProvNinja~\cite{provninja}, the state of the art, selects camouflage operations based on a \emph{regularity score} that measures how frequently an operation appears in normal system behavior.
+The underlying assumption is intuitive: operations that are common in benign environments should be effective at masking attacks.
+
+\paragraph{The functionality problem.}
+This assumption is flawed.
+Consider a Linux host environment where \texttt{kill -9 \textlangle pid\textrangle} is a highly regular operation.
+Injecting this command during a firefox backdoor attack destroys the attacker's foothold, terminating the compromised process and all child processes within it.
+The operation is common, but it is catastrophic to attack functionality.
+More broadly, any camouflage operation that modifies, deletes, or disrupts resources the attack depends on can silently break the attack chain---regardless of how ``normal'' it appears.
+We find that ProvNinja's regularity-based selection suffers from exactly this problem: its camouflage not only fails to improve evasion but actually \emph{backfires}, increasing ML detection rates from 94\% to 100\% (\S\ref{sec:evaluation}).
+
+\paragraph{The stealthiness problem.}
+Even when camouflage operations do not break the attack, na\"ive insertion introduces detectable artifacts.
+Modern detection systems employ not only ML-based classifiers but also rule-based statistical checks: edge-count thresholds ($>\mu + 3\sigma$), KL divergence bounds on operation distributions, and time-window burst detectors~\cite{unicorn,shadewatcher}.
+Blindly adding edges to the provenance graph---even benign ones---inflates edge counts, skews the distribution of operation types, and creates temporal bursts that trip these secondary defenses.
+Prior mimicry attacks target only the ML detection layer and ignore these rule-based checks entirely.
+
+\paragraph{Comparison with other domains.}
+Adversarial evasion has been studied for Android malware, where BagAmmo~\cite{bagammo} wraps injected API calls in try-catch blocks to neutralize side effects and EvadeDroid~\cite{evadedroid} isolates added components from the original app logic.
+These isolation mechanisms do not transfer to provenance graphs: every inserted operation \emph{actually executes} on the host, producing real system calls, modifying real files, and creating real network connections.
+There is no try-catch wrapper for \texttt{rm -rf} at the syscall level.
+The provenance graph setting therefore demands a fundamentally different approach to ensuring that camouflage does not compromise attack functionality.
+
+\paragraph{Our approach.}
+We present \textbf{SafeMimic}, a dependency-aware adversarial mimicry attack that formally separates the \emph{safety} of camouflage operations from their \emph{stealthiness}.
+SafeMimic first extracts the attack's dependency set $\Sdep(A)$---the processes, files, and network connections that the attack chain requires---and computes the effect set $\Seffect(b)$ of each candidate camouflage operation $b$.
+It then constructs a \emph{safe pool} $\Bsafe = \{b \mid \Seffect(b) \cap \Sdep(A) = \emptyset\}$, guaranteeing that no selected operation can interfere with attack execution.
+Only after safety is established does SafeMimic optimize for stealthiness, selecting operations from $\Bsafe$ via $\DKL$ minimization to match the target environment's normal distribution across both operation types and temporal patterns.
+
+Figure~\ref{fig:hero} illustrates the contrast between regularity-based selection (ProvNinja) and SafeMimic's dependency-aware approach.
+While ProvNinja may select high-regularity operations that destroy attack state, SafeMimic provably avoids such operations and simultaneously produces distribution-matched camouflage that evades both ML classifiers and rule-based checks.
+
+\begin{figure*}[t]
+    \centering
+    \fbox{\parbox{0.95\textwidth}{\centering\vspace{2em}\textbf{[Hero Figure Placeholder]}\\[0.5em]
+    (a) ProvNinja: regularity-based selection $\to$ unsafe ops break attack + excess edges trigger rules\\
+    (b) SafeMimic: dependency-aware filtering $\to$ safe pool + KL-matched insertion\\
+    (c) Summary: attack success rate + ML detection rate comparison\vspace{2em}}}
+    \caption{Overview of SafeMimic vs.\ ProvNinja. (a)~ProvNinja selects camouflage by regularity without safety checks---high-regularity operations like \texttt{kill -9 \textlangle pid\textrangle} can destroy attack state, and excess edges create detectable frequency anomalies. (b)~SafeMimic first filters via dependency analysis ($\Bsafe$), then selects via distribution matching to evade both ML and rule-based detection. (c)~Only SafeMimic achieves simultaneous attack preservation (100\%) and ML evasion (0\% detection).}
+    \label{fig:hero}
+\end{figure*}
+
+\paragraph{Contributions.}
+We make the following contributions:
+
+\begin{enumerate}
+    \item \textbf{Formal dependency framework.} We define the dependency set $\Sdep(A)$, effect set $\Seffect(b)$, and safe operation pool $\Bsafe$, and prove a Safety Theorem guaranteeing that operations drawn from $\Bsafe$ cannot compromise attack functionality (\S\ref{sec:design}).
+
+    \item \textbf{Regularity $\neq$ safety.} We prove (Proposition~\ref{prop:regularity}) that an operation's regularity score is neither necessary nor sufficient for safety, providing a direct theoretical critique of ProvNinja's design (\S\ref{sec:formulation}).
+
+    \item \textbf{Dynamic safe space.} We introduce $\Bsafe(t)$, a time-varying safe pool that evolves as the attack progresses through its stages, accommodating the changing dependency structure of multi-step attack campaigns (\S\ref{sec:design}).
+
+    \item \textbf{Distribution-matched insertion.} We design a dual-layer evasion strategy that selects operations from $\Bsafe$ to minimize $\DKL$ divergence from the normal distribution while respecting edge-count, distribution, and temporal constraints imposed by rule-based detectors (\S\ref{sec:design}).
+
+    \item \textbf{Comprehensive evaluation.} We evaluate SafeMimic against three state-of-the-art HIDS (Unicorn~\cite{unicorn}, ShadeWatcher~\cite{shadewatcher}, ThreaTrace~\cite{threatrace}) using four DARPA TC attack scenarios and three DARPA Transparent Computing datasets. SafeMimic achieves 100\% attack success with 0\% ML detection, reducing anomaly scores by 95\% on average (\S\ref{sec:evaluation}).
+\end{enumerate}
+
+\noindent
+Our evaluation reveals a striking finding: ProvNinja's camouflage \emph{backfires}.
+On attacks where the original (uncamouflaged) detection rate is 94\%, ProvNinja's inserted operations push it to 100\%.
+Meanwhile, random camouflage insertion preserves attack success only 24--67\% of the time.
+SafeMimic is the first mimicry attack that provably guarantees both attack preservation and evasion effectiveness against multi-layer detection.

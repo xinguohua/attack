@@ -1,0 +1,56 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+.idea/
+.claude/
+
+# Runtime traces and local smoke outputs.
+pids_attack/results/
+
+# Large local model/data artifacts.
+pids_attack/detection/data/pidsmaker_artifacts/
+pids_attack/detection/data/training_traces/
+pids_attack/detection/data/training_traces.bak.*/
+pids_attack/detection/data/archive/
+pids_attack/detection/data/hybrid_rules/*.pkl
+
+# Experiment generated outputs.
+pids_attack/experiments/E0_detection/results_window/
+pids_attack/experiments/E1_operators/proofs_results/
+pids_attack/experiments/E2_ablation/*/results/
+pids_attack/experiments/E2_ablation/figures/
+pids_attack/experiments/E2_ablation/logs/
+pids_attack/experiments/E2_ablation/snapshots/
+pids_attack/experiments/E2_ablation/progress.md
+pids_attack/experiments/E3_attack/*/results/
+pids_attack/experiments/E3_attack/figures/
+pids_attack/experiments/E3_attack/logs/
+pids_attack/experiments/E3_attack/snapshots/
+
+# Guard against accidentally creating nested project copies under experiments.
+pids_attack/experiments/*/pids_attack/
+
+# Upstream baseline clones are huge pristine third-party repositories. Keep our
+# wrappers under baselines/pipelines/ trackable, but ignore generated outputs.
+baselines/provninja/
+baselines/contorter/
+baselines/goyal/
+baselines/pipelines/*/diffs/
+baselines/pipelines/*/results/
+baselines/pipelines/*/judgments/
+baselines/pipelines/**/*.json
+
+# Vendored upstream clone has its own git remote and local patches. Manage it
+# with its own git checkout unless we deliberately convert it to a submodule.
+pids_attack/PIDSMaker/
+
+# LaTeX build byproducts.
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz

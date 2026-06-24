@@ -1,0 +1,28 @@
+% math_commands.tex — Shared notation for SafeMimic paper
+
+% ---- Check/cross marks for tables ----
+\usepackage{pifont}
+\newcommand{\cmark}{\ding{51}}
+\newcommand{\xmark}{\ding{55}}
+
+% ---- Operators ----
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator*{\argmax}{arg\,max}
+
+% ---- Core notation ----
+\newcommand{\Sdep}{S_{\text{dep}}}
+\newcommand{\Seffect}{S_{\text{eff}}}
+\newcommand{\Bsafe}{B_{\text{safe}}}
+\newcommand{\DKL}{D_{\text{KL}}}
+\newcommand{\Pnormal}{P_{\text{normal}}}
+\newcommand{\Pattack}{P_{\text{attack}}}
+
+% ---- Theorem-like environments ----
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}

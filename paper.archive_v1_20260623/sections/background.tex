@@ -1,0 +1,73 @@
+\section{Background and Threat Model}
+\label{sec:background}
+
+\subsection{Provenance Graphs}
+\label{sec:bg-provenance}
+
+A system provenance graph $G = (V, E)$ captures the causal history of system execution.
+Nodes $V = V_p \cup V_f \cup V_s$ represent three entity types: \emph{processes} ($V_p$), \emph{files} ($V_f$), and \emph{network sockets} ($V_s$).
+Directed edges $E \subseteq V \times V \times \mathcal{L}$ represent system call interactions labeled by type $\ell \in \mathcal{L}$, where common labels include \texttt{read}, \texttt{write}, \texttt{execute}, \texttt{connect}, and \texttt{mmap}.
+For example, a process reading a configuration file produces an edge $(v_f, v_p, \texttt{read})$; a process spawning a child produces $(v_p, v_{p'}, \texttt{execute})$.
+
+Provenance graphs are constructed from kernel-level audit logs (e.g., Linux Audit, ETW, DTrace) and serve as the foundation for provenance-based HIDS.
+Their key property is \emph{completeness}: every system call generates an edge, so attack activities inevitably leave traces in the graph.
+This completeness is both the strength of provenance-based detection and the challenge for adversarial evasion---an attacker cannot remove edges without root-level access to the audit subsystem, but can \emph{add} edges by executing additional operations.
+
+\subsection{Detection Layers}
+\label{sec:bg-detection}
+
+Modern provenance-based HIDS employ two complementary detection mechanisms.
+
+\paragraph{ML-based detection.}
+Systems such as Unicorn~\cite{unicorn}, ShadeWatcher~\cite{shadewatcher}, and ThreaTrace~\cite{threatrace} apply machine learning to provenance graphs.
+Unicorn computes graph sketches via histogram-based feature extraction and flags anomalous subgraphs.
+ShadeWatcher learns GNN embeddings over the graph structure and detects attacks through embedding-space anomaly scores.
+ThreaTrace performs graph-level classification using temporal graph neural networks.
+Despite architectural differences, all three systems produce a scalar anomaly score and flag graphs exceeding a learned threshold.
+
+\paragraph{Rule-based detection.}
+In addition to ML classifiers, practical deployments incorporate statistical checks that detect structural anomalies in the graph.
+These include: (i)~\emph{edge-count thresholds} that flag nodes whose degree exceeds $\mu + k\sigma$ (typically $k=3$) relative to the normal baseline; (ii)~\emph{distribution checks} that measure $\DKL(P_{\text{obs}} \| P_{\text{normal}})$ over operation-type frequencies and flag divergences above a threshold; and (iii)~\emph{temporal burst detectors} that identify unusually dense clusters of operations within sliding time windows.
+
+Prior adversarial evasion work on provenance graphs~\cite{provninja} targets only the ML detection layer.
+As we show in \S\ref{sec:evaluation}, camouflage that reduces ML anomaly scores can simultaneously trigger rule-based checks by inflating edge counts or distorting operation distributions.
+
+\subsection{Mimicry Attacks on Provenance Graphs}
+\label{sec:bg-mimicry}
+
+Mimicry attacks aim to make malicious provenance subgraphs resemble benign ones by injecting additional operations.
+ProvNinja~\cite{provninja} introduced this approach for provenance-based HIDS.
+Given an attack subgraph $G_A \subset G$, ProvNinja selects a set of camouflage operations (called \emph{gadgets}) to insert into the host system during attack execution.
+Each gadget is a benign system operation---e.g., reading a log file, listing a directory, or querying a DNS name---that adds edges to the provenance graph.
+
+ProvNinja ranks candidate gadgets by a \emph{regularity score} $r(b)$ that measures how frequently operation $b$ appears in normal provenance graphs.
+The top-$k$ gadgets by regularity are selected and inserted around the attack operations.
+The implicit assumption is that high-regularity operations are both safe (they will not disrupt the attack) and stealthy (they will reduce the anomaly score).
+
+This assumption fails on both counts.
+First, regularity does not imply safety: a \texttt{kill -9 \textlangle pid\textrangle} command has high regularity in Linux environments but terminates the attack's host process.
+Second, regularity-based selection does not account for the \emph{joint distribution} of operations; inserting many high-regularity operations of the same type skews the operation-type distribution and increases the $\DKL$ divergence that rule-based detectors monitor.
+
+Android-domain evasion techniques face analogous challenges but employ domain-specific solutions.
+BagAmmo~\cite{bagammo} wraps injected API calls in try-catch blocks to suppress side effects, and EvadeDroid~\cite{evadedroid} isolates added components from the original APK's execution flow.
+AdvDroidZero~\cite{advdroiedzero} uses reinforcement learning to select feature-space perturbations.
+These isolation strategies are inapplicable to provenance graphs, where every inserted operation executes at the kernel level with real side effects that are recorded by the audit subsystem.
+
+\subsection{Threat Model}
+\label{sec:bg-threat}
+
+We consider an attacker who has gained initial access to a target system and seeks to execute a multi-step attack campaign (e.g., privilege escalation, lateral movement, data exfiltration) while evading provenance-based HIDS.
+
+\paragraph{Attacker capabilities.}
+The attacker can execute arbitrary user-level operations on the compromised host, including both attack operations and additional camouflage operations.
+Through prior reconnaissance, the attacker has obtained an estimate of the target environment's normal operation distribution $P_{\text{normal}}$---for instance, by observing the system during a benign period or by profiling similar deployments.
+The attacker can control the timing and ordering of camouflage operations relative to attack steps.
+
+\paragraph{Attacker limitations.}
+The attacker has \emph{black-box} access to the detection system: they know that provenance-based HIDS is deployed but do not know the detector's internal architecture, model weights, or decision thresholds.
+The attacker cannot modify or disable the audit subsystem and cannot delete or alter existing edges in the provenance graph.
+The attacker cannot observe the detector's real-time output during the attack.
+
+\paragraph{Attack goal.}
+The attacker's objective is twofold: (i)~\emph{preserve attack functionality}---all attack steps must execute successfully and achieve their intended effect; and (ii)~\emph{evade detection}---the provenance graph, including both attack and camouflage operations, must not be flagged by either ML-based or rule-based detection mechanisms.
+We formalize these requirements in \S\ref{sec:design} through the dependency framework and distribution-matching objective.

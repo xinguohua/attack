@@ -1,0 +1,133 @@
+% implementation.tex — §4 Implementation
+\section{Implementation}
+\label{sec:implementation}
+
+We implement SafeMimic in approximately 1{,}500 lines of Python. The
+system consists of four main components: dependency extraction, the
+operation pool, detection oracles, and dataset integration. Our
+implementation and evaluation scripts are available at
+\url{https://anonymous.4open.science/r/safemimic}.
+
+% ------------------------------------------------------------------
+\subsection{Dependency Extraction}
+\label{sec:dep_extraction}
+
+We model Linux system resource dependencies using eight
+\texttt{ResourceType} categories that capture the distinct classes of
+state an attack may rely on:
+\begin{enumerate}
+  \item \textbf{process\_state} --- Whether a process is running and responsive.
+  \item \textbf{network} --- Network connectivity and firewall rules (e.g.,
+        access to C2 servers or internal services).
+  \item \textbf{credentials} --- Tokens, passwords, and keys (e.g.,
+        SSH keys, \texttt{/etc/shadow} entries, cached credentials).
+  \item \textbf{file\_system} --- Files, directories, and mount points
+        (e.g., payload binaries, configuration files, shared libraries).
+  \item \textbf{permissions} --- User privileges, sudo rules, and SUID
+        binaries that govern access control.
+  \item \textbf{service} --- Systemd service and crontab state
+        (e.g., crontab entries used for persistence).
+  \item \textbf{host\_state} --- Host configuration, kernel modules, and
+        system settings.
+  \item \textbf{environment} --- Environment variables, library paths, and
+        shell configuration objects.
+\end{enumerate}
+Each Linux system operation is mapped to an explicit $\Seffect$ over
+these types. Read-only operations (e.g., \texttt{cat /etc/passwd})
+have $\Seffect = \emptyset$; write operations have non-empty effect sets
+(e.g., \texttt{kill -9 \textlangle pid\textrangle} has
+$\Seffect = \{\textsc{process\_state}\}$). The mapping is specified
+declaratively and can be extended to new operations by adding entries to
+a configuration table.
+
+% ------------------------------------------------------------------
+\subsection{Operation Pool}
+\label{sec:op_pool}
+
+Our candidate pool $B_{\text{all}}$ consists of 17 representative
+Linux system operations, chosen to cover the range of actions a legitimate
+system administrator or monitoring agent would perform:
+\begin{itemize}
+  \item \textbf{10 read-only operations} ($\Seffect = \emptyset$):
+        \texttt{cat /etc/passwd}, \texttt{stat /usr/lib/*.so},
+        \texttt{readdir /proc}, \texttt{cat /etc/hostname},
+        \texttt{ls /tmp}, \texttt{cat /var/log/syslog},
+        \texttt{readdir /etc}, \texttt{ps aux},
+        \texttt{df -h}, and \texttt{netstat -tlnp}. These are always
+        safe by \Cref{thm:static_safety}.
+  \item \textbf{7 write operations} (non-empty $\Seffect$):
+        \texttt{kill -9} (process\_state), \texttt{iptables -A INPUT}
+        (network), \texttt{systemctl stop} (service $\cup$
+        process\_state), \texttt{rm -rf /tmp/*} (file\_system),
+        \texttt{chmod 600} (permissions), \texttt{touch /tmp/benign}
+        (file\_system), and \texttt{export VAR=val} (environment).
+        Of these, only \texttt{touch /tmp/benign} enters $\Bsafe$
+        for typical attack chains, since it creates a \emph{new}
+        resource rather than modifying an existing dependency.
+\end{itemize}
+Each operation is annotated with its expected provenance-graph edge count
+(1--3 edges), which is used by the edge-budget constraint
+(\Cref{eq:budget}).
+
+% ------------------------------------------------------------------
+\subsection{Detection Oracles}
+\label{sec:detectors}
+
+To evaluate evasion effectiveness, we implement two classes of detectors
+that together cover the detection landscape of modern provenance-based
+HIDS~\cite{unicorn,provdetector,shadewatcher,threatrace}.
+
+\paragraph{Feature-MLP detector.}
+We train a multi-layer perceptron on 13 graph-level features extracted
+from provenance graphs: 5 operation-distribution features (fraction of
+\texttt{read}, \texttt{write}, \texttt{connect}, \texttt{execute}, and
+\texttt{other} operations), 5~structural features (edge count, node
+count, average degree, density, and maximum fan-out), and 3~temporal
+features (inter-event entropy, mean inter-event gap, and event-rate
+variance). This feature set is designed to be representative of the
+detection signals used by Unicorn~\cite{unicorn} (graph sketching over
+operation histograms) and ProvDetector~\cite{provdetector} (path-based
+embeddings that capture structural and frequency patterns). The detector
+is trained as a binary classifier on benign versus attack graphs.
+
+\paragraph{Rule-based checks.}
+We implement three rule-based anomaly checks that complement the ML
+detector:
+\begin{enumerate}
+  \item \textbf{Edge-count threshold:} A graph is flagged if its total
+        edge count exceeds $\mu + 3\sigma$, where $\mu$ and $\sigma$
+        are estimated from the benign training set.
+  \item \textbf{KL divergence bound:} The operation-type distribution
+        of the graph is compared against $\Pnormal$; graphs with
+        $\DKL > \tau$ (threshold $\tau = 0.5$ by default) are flagged.
+  \item \textbf{Burst detector:} If more than $\mu_w + 3\sigma_w$
+        events occur in any 5-minute sliding window (where $\mu_w$
+        and $\sigma_w$ are per-window statistics from the training
+        set), the graph is flagged.
+\end{enumerate}
+These rules model the secondary defenses that real HIDS deployments
+layer on top of ML classifiers~\cite{unicorn,shadewatcher}.
+
+% ------------------------------------------------------------------
+\subsection{Datasets}
+\label{sec:datasets}
+
+\paragraph{APT attack scenarios.}
+We define four attack chains that cover distinct threat categories from
+the DARPA Transparent Computing program: firefox backdoor (CADETS, 5 steps),
+phishing APT (THEIA, 5 steps), watering hole (TRACE, 4 steps), and supply
+chain attack (4 steps). Each chain is specified with explicit resource
+dependencies (\S\ref{sec:dep_extraction}).
+
+\paragraph{DARPA Transparent Computing.}
+We integrate three datasets from the DARPA TC
+program~\cite{darpatc}: CADETS (FreeBSD host), THEIA (Linux host), and
+TRACE (Linux host). Each dataset contains weeks of system audit logs
+with ground-truth attack annotations. We implement a CDM JSON loader
+that parses the Common Data Model records into provenance graph edges.
+For scalable experimentation, we also build a realistic graph generator
+calibrated to the published statistics of each dataset (node/edge counts,
+degree distributions, operation-type frequencies, and temporal
+patterns). We validate that graphs produced by the generator are
+statistically indistinguishable from real DARPA TC graphs on the
+13~features used by our ML detector.

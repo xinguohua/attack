@@ -1,0 +1,155 @@
+# Candidate camouflage 命令池
+# 来源:GTFOBins File-read 子集 + Atomic Red Team Discovery + coreutils/procps benign 命令
+# 每条带 inline source 注释,可追溯
+# 全部命令在 pids_range 容器内 dry-run 通过(returncode=0,timeout 5s 内)
+# 总计: 106 条
+
+# === ART(18 条) ===
+lsmod > /dev/null 2>&1    # ART/T1082
+kmod list > /dev/null 2>&1    # ART/T1082
+grep vmw /proc/modules > /dev/null 2>&1    # ART/T1082
+find . -type f > /dev/null 2>&1    # ART/T1083
+ls -R | grep ":$" | sed -e 's/:$//' -e 's/[^-][^\/]*\//--/g' -e 's/^/ /' -e 's/-/|/' > /dev/null 2>&1    # ART/T1083
+which sh > /dev/null 2>&1    # ART/T1083
+cat #{output_file} > /dev/null 2>&1    # ART/T1083
+find . -type f -name ".*" > /dev/null 2>&1    # ART/T1083
+findmnt -t nfs > /dev/null 2>&1    # ART/T1083
+ip neighbour show > /dev/null 2>&1    # ART/T1018
+ip route show > /dev/null 2>&1    # ART/T1018
+netstat -r | grep default > /dev/null 2>&1    # ART/T1018
+ip tcp_metrics show |grep --invert-match "^127\." > /dev/null 2>&1    # ART/T1018
+netstat > /dev/null 2>&1    # ART/T1049
+who -a > /dev/null 2>&1    # ART/T1049
+users > /dev/null 2>&1    # ART/T1033
+w > /dev/null 2>&1    # ART/T1033
+who > /dev/null 2>&1    # ART/T1033
+
+# === bash(1 条) ===
+echo > /dev/null    # bash/builtin
+
+# === coreutils(47 条) ===
+stat /etc/hostname > /dev/null 2>&1    # coreutils/stat
+stat /etc/os-release > /dev/null 2>&1    # coreutils/stat
+stat /etc/timezone > /dev/null 2>&1    # coreutils/stat
+stat /etc/resolv.conf > /dev/null 2>&1    # coreutils/stat
+stat /proc/version > /dev/null 2>&1    # coreutils/stat
+stat /proc/cpuinfo > /dev/null 2>&1    # coreutils/stat
+stat /proc/meminfo > /dev/null 2>&1    # coreutils/stat
+stat /proc/uptime > /dev/null 2>&1    # coreutils/stat
+readlink /proc/self/exe 2>/dev/null > /dev/null    # coreutils/readlink
+readlink /proc/1/exe 2>/dev/null > /dev/null    # coreutils/readlink
+readlink -f /tmp 2>/dev/null > /dev/null    # coreutils/readlink
+test -e /etc/hostname    # coreutils/test
+test -d /tmp    # coreutils/test
+test -f /etc/passwd    # coreutils/test
+ls / > /dev/null 2>&1    # coreutils/ls
+ls -la /tmp > /dev/null 2>&1    # coreutils/ls
+ls -la /var/log > /dev/null 2>&1    # coreutils/ls
+ls -la /etc > /dev/null 2>&1    # coreutils/ls
+cat /etc/os-release > /dev/null 2>&1    # coreutils/cat
+cat /etc/hostname > /dev/null 2>&1    # coreutils/cat
+cat /etc/timezone > /dev/null 2>&1    # coreutils/cat
+head -1 /etc/passwd > /dev/null 2>&1    # coreutils/head
+tail -1 /etc/passwd > /dev/null 2>&1    # coreutils/tail
+wc -l /etc/passwd > /dev/null 2>&1    # coreutils/wc
+md5sum /etc/hostname > /dev/null 2>&1    # coreutils/md5sum
+sha256sum /etc/hostname > /dev/null 2>&1    # coreutils/sha256sum
+df -h > /dev/null 2>&1    # coreutils/df
+df -i > /dev/null 2>&1    # coreutils/df
+du -sh /tmp > /dev/null 2>&1    # coreutils/du
+id > /dev/null 2>&1    # coreutils/id
+whoami > /dev/null 2>&1    # coreutils/whoami
+groups > /dev/null 2>&1    # coreutils/groups
+uname -a > /dev/null 2>&1    # coreutils/uname
+uname -r > /dev/null 2>&1    # coreutils/uname
+uname -m > /dev/null 2>&1    # coreutils/uname
+date > /dev/null 2>&1    # coreutils/date
+env > /dev/null 2>&1    # coreutils/env
+printenv PATH > /dev/null 2>&1    # coreutils/printenv
+true    # coreutils/true
+printf '' > /dev/null    # coreutils/printf
+date +%s > /dev/null 2>&1    # coreutils/date
+date -u > /dev/null 2>&1    # coreutils/date
+cut -d: -f1 /etc/passwd > /dev/null 2>&1    # coreutils/cut
+sort -u /etc/hostname > /dev/null 2>&1    # coreutils/sort
+uniq /etc/hostname > /dev/null 2>&1    # coreutils/uniq
+tr 'a-z' 'A-Z' < /etc/hostname > /dev/null 2>&1    # coreutils/tr
+expand /etc/hostname > /dev/null 2>&1    # coreutils/expand
+
+# === debianutils(2 条) ===
+which bash > /dev/null 2>&1    # debianutils/which
+which curl > /dev/null 2>&1    # debianutils/which
+
+# === findutils(2 条) ===
+find /tmp -maxdepth 1 -type f > /dev/null 2>&1    # findutils/find
+find /etc -maxdepth 1 -type f > /dev/null 2>&1    # findutils/find
+
+# === gawk(1 条) ===
+awk 'END{print NR}' /etc/hostname > /dev/null 2>&1    # gawk/awk
+
+# === glibc(3 条) ===
+getent passwd root > /dev/null 2>&1    # glibc/getent
+getent group root > /dev/null 2>&1    # glibc/getent
+getent hosts localhost > /dev/null 2>&1    # glibc/getent
+
+# === grep(1 条) ===
+grep -c '' /etc/hostname > /dev/null 2>&1    # grep/grep
+
+# === gtfobins(8 条) ===
+base32 /path/to/input-file | base32 --decode > /dev/null 2>&1    # gtfobins/base32
+base64 /path/to/input-file | base64 --decode > /dev/null 2>&1    # gtfobins/base64
+touch x.yara > /dev/null 2>&1    # gtfobins/clamscan
+more /path/to/input-file > /dev/null 2>&1    # gtfobins/more
+perl -ne print /path/to/input-file > /dev/null 2>&1    # gtfobins/perl
+rev /path/to/input-file | rev > /dev/null 2>&1    # gtfobins/rev
+wall --nobanner /path/to/input-file > /dev/null 2>&1    # gtfobins/wall
+wget -i /path/to/input-file > /dev/null 2>&1    # gtfobins/wget
+
+# === inetutils(1 条) ===
+hostname > /dev/null 2>&1    # inetutils/hostname
+
+# === iproute2(5 条) ===
+ip addr > /dev/null 2>&1    # iproute2/ip
+ip link > /dev/null 2>&1    # iproute2/ip
+ip route > /dev/null 2>&1    # iproute2/ip
+ss -tnl > /dev/null 2>&1    # iproute2/ss
+ss -unl > /dev/null 2>&1    # iproute2/ss
+
+# === net-tools(4 条) ===
+netstat -an > /dev/null 2>&1    # net-tools/netstat
+netstat -rn > /dev/null 2>&1    # net-tools/netstat
+ifconfig -a > /dev/null 2>&1    # net-tools/ifconfig
+arp -a > /dev/null 2>&1    # net-tools/arp
+
+# === procps(8 条) ===
+ps -ef > /dev/null 2>&1    # procps/ps
+ps aux > /dev/null 2>&1    # procps/ps
+ps -eLf > /dev/null 2>&1    # procps/ps
+top -bn1 > /dev/null 2>&1    # procps/top
+uptime > /dev/null 2>&1    # procps/uptime
+free -m > /dev/null 2>&1    # procps/free
+vmstat 1 1 > /dev/null 2>&1    # procps/vmstat
+pgrep -l bash > /dev/null 2>&1    # procps/pgrep
+
+# === sed(1 条) ===
+sed -n '1p' /etc/hostname > /dev/null 2>&1    # sed/sed
+
+# === util-linux(4 条) ===
+mount > /dev/null 2>&1    # util-linux/mount
+findmnt > /dev/null 2>&1    # util-linux/findmnt
+lsblk > /dev/null 2>&1    # util-linux/lsblk
+blkid > /dev/null 2>&1    # util-linux/blkid
+
+
+# === juice-shop health-check(Phase 4 新加,for benign 周期采集) ===
+curl -s -o /dev/null http://localhost:3000/    # juice-shop/health-check
+
+# === Phase 4 yml-aligned 命令(写法跟 pool 里已有命令略不同,补全便于 plan 校验) ===
+readlink /proc/self/exe > /dev/null 2>&1    # coreutils/readlink
+readlink /proc/1/exe > /dev/null 2>&1    # coreutils/readlink
+readlink -f /tmp > /dev/null 2>&1    # coreutils/readlink
+base32 /etc/hostname | base32 --decode > /dev/null 2>&1    # coreutils/base32
+base64 /etc/hostname | base64 --decode > /dev/null 2>&1    # coreutils/base64
+rev /etc/hostname | rev > /dev/null 2>&1    # util-linux/rev
+perl -ne print /etc/hostname > /dev/null 2>&1    # gtfobins/perl
+more /etc/hostname > /dev/null 2>&1    # util-linux/more

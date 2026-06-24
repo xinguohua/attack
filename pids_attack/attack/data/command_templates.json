@@ -1,0 +1,17 @@
+{
+  "stat":     ": < {path}",
+  "readlink": "readlink {path} > /dev/null 2>&1",
+  "ls":       "ls -la {path} > /dev/null 2>&1",
+  "cat":      "cat {path} > /dev/null 2>&1",
+  "head":     "head -c {bytes} {path} > /dev/null 2>&1",
+  "wc":       "wc -l {path} > /dev/null 2>&1",
+  "ps":       "ps -ef > /dev/null 2>&1",
+  "id":       "id > /dev/null 2>&1",
+  "uname":    "uname -a > /dev/null 2>&1",
+  "hostname": "hostname > /dev/null 2>&1",
+  "df":       "df -h > /dev/null 2>&1",
+  "free":     "free -h > /dev/null 2>&1",
+  "dig":      "dig +short {host} > /dev/null 2>&1",
+  "getent":   "getent hosts {host} > /dev/null 2>&1",
+  "curl_get": "curl -s -o /dev/null {url} 2>/dev/null"
+}

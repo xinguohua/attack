@@ -1,0 +1,325 @@
+% design.tex — §3 SafeMimic Design
+\section{SafeMimic Design}
+\label{sec:design}
+
+We now present SafeMimic, a dependency-aware adversarial mimicry framework
+that jointly solves the safety and stealthiness problems identified in
+\S\ref{sec:introduction}. The key insight is that an operation's
+\emph{regularity} (how frequently it appears in normal traces) is neither
+necessary nor sufficient for safe camouflage: what matters is whether the
+operation's \emph{effect set} intersects with the attack's \emph{dependency
+set}. SafeMimic formalizes this insight, constructs a provably safe pool of
+candidate operations, and selects from it to minimize behavioral divergence
+from the target environment.
+
+% ------------------------------------------------------------------
+\subsection{Problem Formulation}
+\label{sec:formulation}
+
+\paragraph{Attack chain.}
+An attack chain $A = (s_1, s_2, \ldots, s_n)$ is an ordered sequence of
+steps, where each step $s_i$ depends on a set of system resources
+$\mathrm{deps}(s_i) \subseteq \mathcal{R}$. The resource universe
+$\mathcal{R}$ consists of typed resources such as process states, network
+connectivity, credentials, file-system objects, and permissions
+(\S\ref{sec:dep_extraction}). The \emph{full dependency set} of the attack
+is
+\begin{equation}
+  \Sdep(A) = \bigcup_{i=1}^{n} \mathrm{deps}(s_i).
+  \label{eq:sdep}
+\end{equation}
+
+\paragraph{Effect set.}
+Each candidate benign operation $b$ has an \emph{effect set}
+$\Seffect(b) \subseteq \mathcal{R}$: the resources it modifies when
+executed. Read-only operations have $\Seffect(b) = \emptyset$.
+
+\paragraph{Goal.}
+Given a candidate pool $B_{\text{all}}$ of benign operations and a
+baseline behavior profile $\Pnormal$ of the target environment, the
+attacker seeks a subset $B \subset B_{\text{all}}$ such that:
+\begin{enumerate}
+  \item \textbf{Safety:} $\mathrm{success}(A \oplus B) = \mathrm{success}(A)$,
+        i.e., the interleaved execution of the attack with the camouflage
+        operations preserves attack functionality.
+  \item \textbf{Stealthiness:}
+        $\DKL(P_{A \oplus B} \| \Pnormal)$ is minimized, where
+        $P_{A \oplus B}$ is the behavioral distribution of the
+        camouflaged attack trace.
+\end{enumerate}
+
+A na\"ive approach would select operations with the highest
+\emph{regularity}---the frequency with which they appear in
+$\Pnormal$---as ProvNinja~\cite{provninja} does. We show that this
+conflates two orthogonal concerns.
+
+\begin{proposition}[Regularity $\neq$ Safety]
+\label{prop:regularity}
+There exist benign operations $b$ with $\mathrm{freq}(b) \gg 0$ under
+$\Pnormal$ yet $\Seffect(b) \cap \Sdep(A) \neq \emptyset$.
+\end{proposition}
+
+\begin{proof}
+Consider a Linux host where \texttt{kill -9 \textlangle pid\textrangle} is
+invoked frequently (e.g., by system services and cron jobs). Its regularity is
+high: $\mathrm{freq}(\texttt{kill-process}) \gg 0$. Yet
+$\Seffect(\texttt{kill-process}) = \{\textsc{process\_state}\}$, which
+intersects $\Sdep(A)$ for any attack chain that depends on a running process
+(firefox backdoor, phishing APT, etc.). Executing this operation
+during the attack destroys the attacker's foothold and breaks the chain.
+\end{proof}
+
+\Cref{tab:safe_pool} (Table~\ref{tab:safe_pool}) summarizes representative
+operations with their regularity, effect set, conflict status with a
+firefox backdoor attack chain, and membership in $\Bsafe$.
+
+\begin{table}[t]
+\centering
+\caption{Representative Linux system operations and their safety
+analysis against the firefox backdoor attack chain (\S\ref{sec:evaluation}).
+Regularity is measured on a benign host trace.
+\textbf{High regularity does not imply safety.}}
+\label{tab:safe_pool}
+\small
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Operation} & \textbf{Reg.} & $\Seffect$ & \textbf{Conflict?} & $\in \Bsafe$? \\
+\midrule
+\texttt{cat /etc/passwd}    & High & $\emptyset$          & No  & \cmark \\
+\texttt{stat /usr/lib/*.so} & High & $\emptyset$          & No  & \cmark \\
+\texttt{readdir /proc}      & Med  & $\emptyset$          & No  & \cmark \\
+\texttt{cat /var/log/syslog}& High & $\emptyset$          & No  & \cmark \\
+\texttt{ls /tmp}            & Med  & $\emptyset$          & No  & \cmark \\
+\midrule
+\texttt{kill -9 <pid>}      & High & \{process\_state\}   & Yes & \xmark \\
+\texttt{iptables -A INPUT}  & Med  & \{network\}          & Yes & \xmark \\
+\texttt{systemctl stop}     & Med  & \{service, process\} & Yes & \xmark \\
+\texttt{rm -rf /tmp/*}      & Low  & \{file\_system\}     & Yes & \xmark \\
+\texttt{touch /tmp/benign}  & Low  & \{file\_system\}     & No  & \cmark \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ------------------------------------------------------------------
+\subsection{Safe Pool Construction}
+\label{sec:safe_pool}
+
+The core of SafeMimic is the construction of a \emph{safe pool}
+$\Bsafe$---the subset of candidate operations that provably cannot
+interfere with the attack.
+
+\begin{definition}[Safe Pool]
+\label{def:safe_pool}
+Given an attack chain $A$ with dependency set $\Sdep(A)$ and a candidate
+pool $B_{\text{all}}$,
+\begin{equation}
+  \Bsafe = \bigl\{\, b \in B_{\text{all}} \;\big|\;
+           \Seffect(b) \cap \Sdep(A) = \emptyset \,\bigr\}.
+  \label{eq:bsafe}
+\end{equation}
+\end{definition}
+
+\begin{theorem}[Static Safety]
+\label{thm:static_safety}
+If\/ $b \in \Bsafe$, then $\mathrm{success}(A \oplus b) = \mathrm{success}(A)$.
+\end{theorem}
+
+\begin{proof}
+Let $b \in \Bsafe$. By \Cref{def:safe_pool},
+$\Seffect(b) \cap \Sdep(A) = \emptyset$. Therefore, for every step
+$s_i$ in $A$, all resources in $\mathrm{deps}(s_i) \subseteq \Sdep(A)$
+remain unmodified after executing $b$, since $b$ only modifies resources
+in $\Seffect(b)$. Because each step $s_i$ succeeds if and only if its
+dependencies are intact, the entire chain succeeds.
+\end{proof}
+
+\begin{corollary}[Composability]
+\label{cor:composability}
+If\/ $b_1, b_2, \ldots, b_k \in \Bsafe$, then
+$\mathrm{success}(A \oplus b_1 \oplus \cdots \oplus b_k) = \mathrm{success}(A)$.
+\end{corollary}
+
+\begin{proof}
+By induction on $k$. Each $b_j$ satisfies
+$\Seffect(b_j) \cap \Sdep(A) = \emptyset$, so the argument of
+\Cref{thm:static_safety} applies at each insertion step. No $b_j$
+modifies any resource in $\Sdep(A)$, so no $b_j$ affects the
+preconditions of any $b_{j'}$ (with $j' > j$) on attack resources.
+\end{proof}
+
+\paragraph{Filtering modes.}
+SafeMimic supports two filtering granularities:
+\begin{itemize}
+  \item \textbf{Conservative (type-level):} An operation conflicts if its
+        effect contains \emph{any} resource of the same \texttt{ResourceType}
+        as an attack dependency, regardless of the specific instance. For
+        example, \texttt{kill -9} conflicts with any
+        process-state dependency, even if the attack depends on a different process.
+  \item \textbf{Precise (instance-level):} Conflict requires an exact
+        match on both resource type and instance name. This yields a
+        larger $\Bsafe$ but risks false negatives if operations have
+        broader effects than their named target.
+\end{itemize}
+We use conservative mode by default and evaluate the precise mode in
+ablation studies (\S\ref{sec:evaluation}).
+
+% ------------------------------------------------------------------
+\subsection{Dynamic Safety Space}
+\label{sec:dynamic}
+
+The static $\Bsafe$ is conservative: it excludes operations that conflict
+with \emph{any} step in the attack, even steps that have already
+completed. As the attack progresses through stage~$t$, earlier
+dependencies may no longer need protection.
+
+\begin{definition}[Active Dependencies]
+\label{def:active_deps}
+At attack stage $t$ (after step $s_t$ has executed), the active
+dependency set is
+\begin{equation}
+  \Sdep(A, t) = \bigcup_{i > t} \mathrm{deps}(s_i),
+  \label{eq:sdep_t}
+\end{equation}
+i.e., only the dependencies of steps that remain to be executed.
+\end{definition}
+
+\begin{definition}[Dynamic Safe Pool]
+\label{def:dynamic_safe_pool}
+\begin{equation}
+  \Bsafe(t) = \bigl\{\, b \in B_{\text{all}} \;\big|\;
+               \Seffect(b) \cap \Sdep(A, t) = \emptyset \,\bigr\}.
+  \label{eq:bsafe_t}
+\end{equation}
+\end{definition}
+
+\begin{theorem}[Dynamic Safety Monotonicity]
+\label{thm:dynamic}
+For all attack stages $t$:
+\begin{enumerate}
+  \item $\Bsafe \subseteq \Bsafe(t)$: the dynamic pool is always at
+        least as large as the static pool.
+  \item If $t_2 > t_1$ and steps $s_{t_1+1}, \ldots, s_{t_2}$ have
+        completed between stages $t_1$ and $t_2$, then
+        $\Bsafe(t_1) \subseteq \Bsafe(t_2)$.
+\end{enumerate}
+\end{theorem}
+
+\begin{proof}
+(1)~Since $\Sdep(A, t) \subseteq \Sdep(A)$ (we drop completed steps'
+dependencies), any $b$ with $\Seffect(b) \cap \Sdep(A) = \emptyset$
+also satisfies $\Seffect(b) \cap \Sdep(A, t) = \emptyset$.
+(2)~$\Sdep(A, t_2) \subseteq \Sdep(A, t_1)$ because additional steps
+have completed between $t_1$ and $t_2$, so
+$\Bsafe(t_1) \subseteq \Bsafe(t_2)$ follows by the same argument.
+\end{proof}
+
+\paragraph{Implication.}
+The monotonicity property means that SafeMimic has \emph{more}
+camouflage options at later attack stages, precisely when the attacker is
+most active and most in need of cover. In our Linux host experiments
+(\S\ref{sec:evaluation}), the dynamic pool grows from 10 operations at
+stage~0 to 14 operations by the final stage of a 5-step firefox backdoor
+attack.
+
+% ------------------------------------------------------------------
+\subsection{Distribution-Matched Insertion}
+\label{sec:distribution}
+
+Having constructed a safe pool, SafeMimic must select \emph{which}
+operations to insert and \emph{when} to insert them, minimizing the
+behavioral divergence from $\Pnormal$ while respecting an edge budget
+that prevents edge-count anomaly triggers.
+
+\paragraph{Greedy selection.}
+SafeMimic uses a greedy algorithm that iteratively picks the operation
+from $\Bsafe$ that most reduces the KL divergence between the
+camouflaged trace's operation distribution and $\Pnormal$:
+\begin{equation}
+  b^{*} = \argmin_{b \in \Bsafe}
+           \DKL\!\bigl(P_{\text{selected} \cup \{b\}} \;\|\; \Pnormal\bigr),
+  \label{eq:greedy}
+\end{equation}
+subject to the constraint that the cumulative number of extra provenance
+edges does not exceed a budget $E_{\max}$:
+\begin{equation}
+  \sum_{b \in \text{selected}} \mathrm{edges}(b) \leq E_{\max}.
+  \label{eq:budget}
+\end{equation}
+This budget prevents the camouflage itself from triggering edge-count
+anomaly rules (edge count $> \mu + 3\sigma$)~\cite{unicorn,shadewatcher}.
+
+\paragraph{Unique target diversity.}
+To avoid inflating the average degree of any single node in the
+provenance graph, SafeMimic ensures that each inserted operation targets
+a \emph{different} resource. This prevents the creation of
+high-fan-out ``hub'' nodes that are easily flagged by structural anomaly
+detectors.
+
+\paragraph{Temporal scheduling.}
+Rather than inserting all camouflage operations simultaneously (which
+creates a detectable burst in time-window-based
+detectors~\cite{unicorn}), SafeMimic spreads insertions uniformly across
+the attack duration:
+\begin{equation}
+  t_j = \frac{j \cdot T}{k+1} + \epsilon_j, \qquad
+  \epsilon_j \sim \mathcal{N}(0,\, \sigma_{\text{jitter}}^2),
+  \label{eq:temporal}
+\end{equation}
+where $T$ is the total attack duration, $k$ is the number of insertions,
+and $\epsilon_j$ is a small Gaussian jitter to avoid perfectly periodic
+patterns.
+
+\paragraph{Algorithm overview.}
+\Cref{alg:safemimic} presents the complete SafeMimic procedure. The
+algorithm takes as input an attack chain, a candidate operation pool, and
+a baseline behavior profile, and produces a temporally scheduled
+insertion plan that is both provably safe and distribution-matched.
+
+\begin{algorithm}[t]
+\caption{SafeMimic: Dependency-Aware Adversarial Mimicry}
+\label{alg:safemimic}
+\begin{algorithmic}[1]
+\Require Attack chain $A = (s_1, \ldots, s_n)$; candidate pool
+         $B_{\text{all}}$; baseline profile $\Pnormal$; edge budget
+         $E_{\max}$; insertion count $k$
+\Ensure Scheduled insertion plan $\mathcal{S}$
+\Statex
+\State \textbf{// Phase 1: Dependency extraction}
+\State $\Sdep(A) \gets \bigcup_{i=1}^{n} \mathrm{deps}(s_i)$
+\Statex
+\State \textbf{// Phase 2: Safe pool construction}
+\State $\Bsafe \gets \{b \in B_{\text{all}} \mid
+        \Seffect(b) \cap \Sdep(A) = \emptyset\}$
+\Statex
+\State \textbf{// Phase 3: Distribution-matched selection}
+\State $\text{selected} \gets \emptyset$;~
+       $\text{edges\_used} \gets 0$
+\For{$j = 1$ \textbf{to} $k$}
+  \State $b^{*} \gets \argmin_{b \in \Bsafe \setminus \text{selected}}
+          \DKL(P_{\text{selected} \cup \{b\}} \| \Pnormal)$
+  \If{$\text{edges\_used} + \mathrm{edges}(b^{*}) > E_{\max}$}
+    \State \textbf{break}
+  \EndIf
+  \State $\text{selected} \gets \text{selected} \cup \{b^{*}\}$
+  \State $\text{edges\_used} \mathrel{+}= \mathrm{edges}(b^{*})$
+\EndFor
+\Statex
+\State \textbf{// Phase 4: Temporal scheduling}
+\State $T \gets \text{attack duration}$
+\For{$j = 1$ \textbf{to} $|\text{selected}|$}
+  \State $t_j \gets \frac{j \cdot T}{|\text{selected}| + 1}
+          + \epsilon_j$,~~$\epsilon_j \sim \mathcal{N}(0, \sigma^2)$
+\EndFor
+\State $\mathcal{S} \gets \{(t_j,\, b_j) \mid b_j \in \text{selected}\}$
+\State \Return $\mathcal{S}$
+\end{algorithmic}
+\end{algorithm}
+
+\paragraph{Complexity.}
+The greedy loop (\Cref{alg:safemimic}, lines 7--13) runs $k$ iterations,
+each evaluating $|\Bsafe|$ candidates. Computing $\DKL$ over the
+discrete operation-type distribution takes $O(|\mathcal{T}|)$ time, where
+$\mathcal{T}$ is the set of operation types. The overall complexity is
+$O(k \cdot |\Bsafe| \cdot |\mathcal{T}|)$, which is negligible compared
+to the attack execution itself (typically under 100\,ms for our
+17-operation pool).

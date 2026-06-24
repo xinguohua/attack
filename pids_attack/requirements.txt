@@ -1,0 +1,56 @@
+# pids_attack 全部运行时依赖(mimicattack conda env 用)
+# ============================================
+# 一份文件管全部 — mimicattack 核心 + PIDSMaker 4.0 上游 deps,都装到同一个 conda env。
+#
+# 装法:
+#   conda activate mimicattack
+#   pip install -r pids_attack/requirements.txt
+#   # torch_scatter 必须单独装,见 detection/pidsmaker_setup.sh
+#
+# 已知约束:
+#   - python 3.10.x(mimicattack env)
+#   - macOS Apple Silicon(Docker Desktop LinuxKit VM,sysdig 不可用)
+#   - torch 2.1.0 + torch_geometric 2.7.0(env 已装,**不要**升级)
+
+# ============================================================================
+# Section A:mimicattack 核心 deps(跑 STAGE 1-5 必需,容器编排 / strace / SQL)
+# ============================================================================
+numpy>=1.24
+scikit-learn>=1.3
+pyyaml>=6.0
+pytest>=7.4
+
+# ============================================================================
+# Section B:PIDSMaker 4.0 上游运行时 deps(STAGE 6/7 接真 PIDSMaker 才必需)
+# ----------------------------------------------------------------------------
+# 解决 RISK_P1_DEPS_CONFLICT(BLOCKERS.md):
+#   PIDSMaker 4.0 pyproject.toml 没声明 [project.dependencies],
+#   `pip install -e pids_attack/PIDSMaker` 装上包但 import 一连串 ImportError。
+#   下面是实测反推 + pip freeze 锁定的版本。
+# ============================================================================
+
+# --- GNN / 图处理 ---
+# torch_scatter 单独从 PyG wheel index 装(setup.sh 处理),这里只 pin 版本作为 reference
+torch_scatter==2.1.2
+igraph==1.0.0
+networkx==3.4.2
+
+# --- featurization / 文本嵌入 ---
+gensim==4.4.0
+nltk==3.9.4
+
+# --- Postgres 客户端(PIDSMaker 同时 import psycopg 和 psycopg2)---
+psycopg[binary]==3.3.4
+psycopg2-binary==2.9.12
+
+# --- 实验追踪(W&B 可选,默认关闭也能跑)---
+wandb==0.26.1
+
+# --- 配置 / 工具 ---
+yacs==0.1.8
+pytz==2026.1.post1
+wget==3.2
+
+# --- 数据处理 / 可视化 ---
+pandas==2.3.3
+matplotlib==3.10.8

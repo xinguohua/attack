@@ -1,0 +1,18 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+Provenance graph evasion attacks face a dual failure problem: injected operations may corrupt the attack's causal dependencies (\emph{safety failure}) or introduce statistical anomalies that make the evasion itself detectable (\emph{stealth failure}).
+We presented \textsc{SafeMimic}, a framework that addresses both failure modes through a principled safety-first design.
+By formally defining a dynamic safety space---the set of operations whose system effects are provably disjoint from the attack's dependency set---\textsc{SafeMimic} guarantees that injected camouflage never disrupts attack functionality (Safety Theorem).
+Within this safe space, distribution-aware selection via KL-divergence minimization ensures that the resulting provenance graph is statistically indistinguishable from benign activity.
+
+Our evaluation demonstrates that \textsc{SafeMimic} achieves 100\% attack preservation and 0\% ML detection across both feature-based and GNN-based detectors.
+In contrast, we show that ProvNinja's regularity-based approach---which lacks safety reasoning---produces a \emph{backfire effect}: its injected operations create frequency anomalies and dependency violations that increase rather than decrease detectability.
+We formalize this finding as a proposition establishing that regularity does not imply safety, providing theoretical grounding for an empirically observed but previously unexplained phenomenon.
+
+The key contributions of this work are: (1)~the first formal treatment of safety in provenance graph evasion, (2)~the dynamic safety space abstraction that adapts as operations are injected, (3)~theoretical results connecting safety, regularity, and detectability, and (4)~empirical evidence that safety-unaware evasion can backfire against modern detectors.
+
+Several directions remain for future work.
+First, validating \textsc{SafeMimic} on the full-scale authentic DARPA TC datasets (rather than calibrated synthetic graphs) would strengthen the empirical findings.
+Second, investigating adaptive defenses that are specifically aware of distribution-matching evasion strategies---for instance, detectors that monitor for unnaturally smooth operation distributions---is an important next step for the arms race.
+Third, extending the framework to additional operating systems (e.g., Windows ETW, macOS DTrace) and cloud VM infrastructures would demonstrate the generality of the safety-space abstraction in practice.

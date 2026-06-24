@@ -1,0 +1,539 @@
+# benign_collection_plan.yml
+# ===========================
+# Benign trace 编排 Plan(配置驱动,改这个文件 = 改采集行为)
+#
+# 用途:`scripts/run.py detect collect-benign` 读本文件,按其中 daemons + scenarios + 容器/strace
+# 配置驱动一次 30min 采集,产出一条完整 benign strace + /proc 快照 + CDM SQL。
+#
+# 为什么是 yml 不是 hardcode:
+#   - 任何人打开本文件,一眼看清"benign 日志怎么产生" — daemons / scenarios / 周期 / 命令
+#     全部明文,无需翻 Python
+#   - 想换命令组合 / 加新 scenario / 调周期 → 改 yml,代码不动
+#   - 配置可被 unittest 校验(eg 所有命令必须 from candidate_pool.txt)
+#
+# 严格约束:
+#   1. 本文件中所有命令必须出现在 shared/candidate_pool.txt(去注释后)
+#   2. daemons 只读 / 无副作用 / 在容器内 dry-run 通过
+#   3. 加新 daemon / scenario 时同步:
+#      a) 命令 from candidate_pool.txt
+#      b) `tests/test_benign_plan_pool_alignment.py` 全过
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ============================================================================
+# 容器配置
+# ============================================================================
+container:
+  image: pids_range:latest          # 与攻击容器同 image,trace 分布同源
+  name: pids_benign                 # 独立实例,不污染攻击采集
+  cap_add:
+    - SYS_PTRACE                    # strace -p 1 需要
+  remove_on_finish: true            # 采完即删
+  juice_shop_ready_timeout_sec: 60  # 等 juice-shop curl 200,超时报错
+
+
+# ============================================================================
+# 采集时长 + 阶段
+# ============================================================================
+collection:
+  total_duration_sec: 300           # 5 min(跟历史训练数据对齐:实测 strace 平均 315s)
+  warmup_sec: 10                    # daemons 启起来后等几轮再起 strace
+  strace_settle_sec: 5              # strace attach 完到 daemon 命令稳定输出的间隔
+
+
+# ============================================================================
+# strace 配置
+# ============================================================================
+strace:
+  flags: "-fA -ttt -s 256"          # -f 跟 fork / -A append / -ttt epoch us / -s 256 字符串截断
+  # 注:代码 strace_a 跑 bash orchestrator(fork),strace_b 用 -p $juice_shop_pid attach,
+  # 不再读 yml 里的 attach_pid(已删)。
+  output_in_container: /tmp/benign.strace
+  syscalls:                         # 19 个 syscall,1:1 覆盖 PIDSMaker 10 种 EVENT_*
+    - open
+    - openat
+    - creat
+    - read
+    - pread64
+    - readv
+    - write
+    - pwrite64
+    - writev
+    - execve
+    - execveat
+    - connect
+    - sendto
+    - sendmsg
+    - recvfrom
+    - recvmsg
+    - clone
+    - clone3
+    - fork
+    - vfork
+
+
+# ============================================================================
+# /proc 快照(strace 起跑前 dump,补 strace 起跑前已运行的进程的 cmdline)
+# 注:代码硬编码「strace 前 dump」+ 固定 `PID=$pid CMDLINE=... EXE=...` 格式,
+#     原 before_strace / format 字段无效已删。
+# ============================================================================
+proc_snapshot:
+  enabled: true                     # 必开,否则 juice-shop / daemon 父 bash 的 cmdline 全空
+  output_in_container: /tmp/benign.proc_snapshot
+
+
+# ============================================================================
+# 7 个 daemon — 后台 while-loop,模拟真实机器周期任务
+# 周期 LCM = 180s,30min = 600s 内每种周期至少完整出现 N 次
+# 错相设计避免同周期 daemon 在同一时刻爆发(模拟真实系统不同 daemon 异步)
+# ============================================================================
+daemons:
+  - id: D1_keepalive
+    description: 进程存活监控(每 10s 一次,模拟监控守护)
+    period_sec: 10
+    phase_offset_sec: 0
+    commands:
+      - "pgrep -l bash > /dev/null 2>&1"
+
+  - id: D2_proc_probe
+    description: /proc 文件系统轮询(systemd-watchdog 风格)
+    period_sec: 30
+    phase_offset_sec: 0
+    commands:
+      - "stat /proc/version > /dev/null 2>&1"
+      - "stat /proc/cpuinfo > /dev/null 2>&1"
+      - "stat /proc/meminfo > /dev/null 2>&1"
+      - "stat /proc/uptime > /dev/null 2>&1"
+      - "readlink /proc/self/exe 2>/dev/null > /dev/null"
+
+  - id: D3_metric_scrape
+    description: Prometheus-like 监控抓取
+    period_sec: 60
+    phase_offset_sec: 0
+    commands:
+      - "top -bn1 > /dev/null 2>&1"
+      - "free -m > /dev/null 2>&1"
+      - "uptime > /dev/null 2>&1"
+      - "vmstat 1 1 > /dev/null 2>&1"
+
+  - id: D4_disk_watch
+    description: 磁盘监控
+    period_sec: 90
+    phase_offset_sec: 0
+    commands:
+      - "du -sh /tmp > /dev/null 2>&1"
+      - "df -h > /dev/null 2>&1"
+      - "df -i > /dev/null 2>&1"
+      - "lsblk > /dev/null 2>&1"
+
+  - id: D5_net_watch
+    description: 网络长周期巡视
+    period_sec: 180
+    phase_offset_sec: 0
+    commands:
+      - "ss -tnl > /dev/null 2>&1"
+      - "ss -unl > /dev/null 2>&1"
+      - "netstat -an > /dev/null 2>&1"
+      - "ip route > /dev/null 2>&1"
+      - "arp -a > /dev/null 2>&1"
+
+  - id: D6_backup_sim
+    description: 模拟备份前的元数据 + checksum 阶段(180s 周期,跟 D5 错半相)
+    period_sec: 180
+    phase_offset_sec: 90              # 错相 90s,跟 D5 在 t=0/90 错开
+    commands:
+      - "stat /etc/hostname > /dev/null 2>&1"
+      - "stat /etc/os-release > /dev/null 2>&1"
+      - "stat /etc/timezone > /dev/null 2>&1"
+      - "stat /etc/resolv.conf > /dev/null 2>&1"
+      - "md5sum /etc/hostname > /dev/null 2>&1"
+      - "sha256sum /etc/hostname > /dev/null 2>&1"
+      - "readlink /proc/self/exe > /dev/null 2>&1"
+      - "readlink -f /tmp > /dev/null 2>&1"
+
+  - id: D7_cron_glance
+    description: 模拟 cron 跑文本分析任务(30s 周期,跟 D2 错半相)
+    period_sec: 30
+    phase_offset_sec: 15              # 错相 15s,跟 D2 在 t=0/30 错开,t=15/45 落位
+    commands:
+      - "head -1 /etc/passwd > /dev/null 2>&1"
+      - "tail -1 /etc/passwd > /dev/null 2>&1"
+      - "wc -l /etc/passwd > /dev/null 2>&1"
+      - "cut -d: -f1 /etc/passwd > /dev/null 2>&1"
+      - "sort -u /etc/hostname > /dev/null 2>&1"
+
+
+# ============================================================================
+# 10 个前台 scenario — 模拟真人运维 / 调试 / 审计活动
+# 30min 内随机间隔触发若干次,每次随机选 1 个 scenario 跑
+# 每个 scenario 由若干 slot 组成,slot 顺序固定,槽内命令候选随机抽 1 条
+# 这样 30min 多次触发同一 scenario 也不会完全重复(命令组合不同)
+# ============================================================================
+scenarios:
+  # ------ 触发策略 ------
+  trigger:
+    first_at_sec_min: 60              # 第一次触发不早于 1 分钟
+    first_at_sec_max: 180             # 第一次触发不晚于 3 分钟
+    interval_min_sec: 120             # 两次 scenario 间隔 ≥ 2min
+    interval_max_sec: 300             # 两次 scenario 间隔 ≤ 5min
+    inter_command_sleep_min_sec: 1    # 同 scenario 内命令间隔 1-3s 模拟真人输入
+    inter_command_sleep_max_sec: 3
+    end_buffer_sec: 60                # 距离 30min 结束 < 60s 不再触发(避免 scenario 被掐断)
+
+  # ------ scenario 池 ------
+  pool:
+
+    # --- 1. 运维每日巡检 ---
+    - id: sysadmin_daily_check
+      description: 运维每天巡检一遍机器,从时间到机器到磁盘到内存到进程到网络
+      slots:
+        - name: 看时间
+          candidates:
+            - "date > /dev/null 2>&1"
+            - "date -u > /dev/null 2>&1"
+            - "date +%s > /dev/null 2>&1"
+        - name: 看机器
+          candidates:
+            - "uname -a > /dev/null 2>&1"
+            - "uname -r > /dev/null 2>&1"
+            - "uname -m > /dev/null 2>&1"
+            - "hostname > /dev/null 2>&1"
+        - name: uptime
+          candidates:
+            - "uptime > /dev/null 2>&1"
+        - name: 看磁盘
+          candidates:
+            - "df -h > /dev/null 2>&1"
+            - "df -i > /dev/null 2>&1"
+        - name: 看内存
+          candidates:
+            - "free -m > /dev/null 2>&1"
+            - "vmstat 1 1 > /dev/null 2>&1"
+        - name: 看 CPU
+          candidates:
+            - "top -bn1 > /dev/null 2>&1"
+        - name: 看进程
+          candidates:
+            - "ps -ef > /dev/null 2>&1"
+            - "ps aux > /dev/null 2>&1"
+            - "pgrep -l bash > /dev/null 2>&1"
+        - name: 看网络
+          candidates:
+            - "netstat > /dev/null 2>&1"
+            - "netstat -an > /dev/null 2>&1"
+            - "ss -tnl > /dev/null 2>&1"
+
+    # --- 2. 故障排查(机器慢) ---
+    - id: incident_triage
+      description: 报"机器慢"排查负载 / IO / 内存 / 进程 / 磁盘
+      slots:
+        - name: load
+          candidates:
+            - "uptime > /dev/null 2>&1"
+        - name: CPU
+          candidates:
+            - "top -bn1 > /dev/null 2>&1"
+        - name: vmstat
+          candidates:
+            - "vmstat 1 1 > /dev/null 2>&1"
+        - name: 内存
+          candidates:
+            - "free -m > /dev/null 2>&1"
+        - name: 进程
+          candidates:
+            - "ps aux > /dev/null 2>&1"
+            - "ps -eLf > /dev/null 2>&1"
+        - name: 磁盘空间
+          candidates:
+            - "df -h > /dev/null 2>&1"
+        - name: 大目录
+          candidates:
+            - "du -sh /tmp > /dev/null 2>&1"
+        - name: 挂载
+          candidates:
+            - "mount > /dev/null 2>&1"
+            - "findmnt > /dev/null 2>&1"
+        - name: 块设备
+          candidates:
+            - "lsblk > /dev/null 2>&1"
+
+    # --- 3. 安全审计 ---
+    - id: security_audit
+      description: 审计员看登录会话 / 用户身份 / root 状态 / 进程 / 网络监听
+      slots:
+        - name: 登录
+          candidates:
+            - "who > /dev/null 2>&1"
+            - "w > /dev/null 2>&1"
+            - "users > /dev/null 2>&1"
+            - "who -a > /dev/null 2>&1"
+        - name: 当前身份
+          candidates:
+            - "id > /dev/null 2>&1"
+            - "groups > /dev/null 2>&1"
+        - name: root 状态
+          candidates:
+            - "getent passwd root > /dev/null 2>&1"
+            - "getent group root > /dev/null 2>&1"
+        - name: 进程 / 线程
+          candidates:
+            - "ps -eLf > /dev/null 2>&1"
+            - "pgrep -l bash > /dev/null 2>&1"
+        - name: 网络监听
+          candidates:
+            - "ss -tnl > /dev/null 2>&1"
+            - "netstat -an > /dev/null 2>&1"
+
+    # --- 4. 新机环境盘点 ---
+    - id: env_inventory
+      description: 接手新机器,从机器名 → 内核 → OS → 用户 → 环境逐层盘点
+      slots:
+        - name: 机器名
+          candidates:
+            - "hostname > /dev/null 2>&1"
+        - name: 内核版本 1
+          candidates:
+            - "uname -a > /dev/null 2>&1"
+        - name: 内核版本 2
+          candidates:
+            - "uname -r > /dev/null 2>&1"
+        - name: 架构
+          candidates:
+            - "uname -m > /dev/null 2>&1"
+        - name: OS
+          candidates:
+            - "cat /etc/os-release > /dev/null 2>&1"
+        - name: 时区
+          candidates:
+            - "cat /etc/timezone > /dev/null 2>&1"
+            - "stat /etc/timezone > /dev/null 2>&1"
+        - name: 当前用户
+          candidates:
+            - "id > /dev/null 2>&1"
+            - "whoami > /dev/null 2>&1"
+        - name: 环境
+          candidates:
+            - "env > /dev/null 2>&1"
+            - "printenv PATH > /dev/null 2>&1"
+        - name: 工具 1
+          candidates:
+            - "which bash > /dev/null 2>&1"
+        - name: 工具 2
+          candidates:
+            - "which curl > /dev/null 2>&1"
+
+    # --- 5. 网络诊断 ---
+    - id: network_diagnosis
+      description: 排查网络问题,网卡 → 链路 → 路由 → DNS → ARP → 连接
+      slots:
+        - name: 网卡
+          candidates:
+            - "ip addr > /dev/null 2>&1"
+            - "ifconfig -a > /dev/null 2>&1"
+        - name: 链路
+          candidates:
+            - "ip link > /dev/null 2>&1"
+        - name: 路由
+          candidates:
+            - "ip route > /dev/null 2>&1"
+            - "netstat -rn > /dev/null 2>&1"
+        - name: DNS
+          candidates:
+            - "getent hosts localhost > /dev/null 2>&1"
+        - name: ARP
+          candidates:
+            - "arp -a > /dev/null 2>&1"
+            - "ip neighbour show > /dev/null 2>&1"
+        - name: 连接
+          candidates:
+            - "netstat -an > /dev/null 2>&1"
+            - "ss -tnl > /dev/null 2>&1"
+            - "ss -unl > /dev/null 2>&1"
+
+    # --- 6. 找文件 ---
+    - id: file_search
+      description: 从家目录开始找文件,逐渐扩到根目录
+      slots:
+        - name: 当前位置
+          candidates:
+            - "readlink -f /tmp > /dev/null 2>&1"
+        - name: 根目录列表
+          candidates:
+            - "ls / > /dev/null 2>&1"
+        - name: tmp 文件
+          candidates:
+            - "find /tmp -maxdepth 1 -type f > /dev/null 2>&1"
+        - name: etc 文件
+          candidates:
+            - "find /etc -maxdepth 1 -type f > /dev/null 2>&1"
+        - name: 当前目录所有文件
+          candidates:
+            - "find . -type f > /dev/null 2>&1"
+        - name: 隐藏文件
+          candidates:
+            - "find . -type f -name \".*\" > /dev/null 2>&1"
+        - name: 工具位置
+          candidates:
+            - "which sh > /dev/null 2>&1"
+
+    # --- 7. 浏览文本文件 ---
+    - id: log_glance
+      description: 看几个文件的头尾,做文本处理(模拟开发或运维快速审阅)
+      slots:
+        - name: 头
+          candidates:
+            - "head -1 /etc/passwd > /dev/null 2>&1"
+        - name: 尾
+          candidates:
+            - "tail -1 /etc/passwd > /dev/null 2>&1"
+        - name: 数行
+          candidates:
+            - "wc -l /etc/passwd > /dev/null 2>&1"
+        - name: 抽列
+          candidates:
+            - "cut -d: -f1 /etc/passwd > /dev/null 2>&1"
+        - name: 排序
+          candidates:
+            - "sort -u /etc/hostname > /dev/null 2>&1"
+        - name: 去重
+          candidates:
+            - "uniq /etc/hostname > /dev/null 2>&1"
+        - name: 计数
+          candidates:
+            - "grep -c '' /etc/hostname > /dev/null 2>&1"
+        - name: awk
+          candidates:
+            - "awk 'END{print NR}' /etc/hostname > /dev/null 2>&1"
+        - name: sed
+          candidates:
+            - "sed -n '1p' /etc/hostname > /dev/null 2>&1"
+        - name: 大小写
+          candidates:
+            - "tr 'a-z' 'A-Z' < /etc/hostname > /dev/null 2>&1"
+
+    # --- 8. 完整性校验 ---
+    - id: integrity_check
+      description: 算关键文件的 hash + stat 元数据(模拟备份前校验)
+      slots:
+        - name: md5
+          candidates:
+            - "md5sum /etc/hostname > /dev/null 2>&1"
+        - name: sha256
+          candidates:
+            - "sha256sum /etc/hostname > /dev/null 2>&1"
+        - name: stat 1
+          candidates:
+            - "stat /etc/hostname > /dev/null 2>&1"
+        - name: stat 2
+          candidates:
+            - "stat /etc/os-release > /dev/null 2>&1"
+        - name: stat 3
+          candidates:
+            - "stat /etc/timezone > /dev/null 2>&1"
+        - name: stat 4
+          candidates:
+            - "stat /etc/resolv.conf > /dev/null 2>&1"
+        - name: stat /proc 1
+          candidates:
+            - "stat /proc/version > /dev/null 2>&1"
+        - name: stat /proc 2
+          candidates:
+            - "stat /proc/cpuinfo > /dev/null 2>&1"
+        - name: readlink 1
+          candidates:
+            - "readlink /proc/self/exe > /dev/null 2>&1"
+        - name: readlink 2
+          candidates:
+            - "readlink /proc/1/exe > /dev/null 2>&1"
+        - name: readlink 3
+          candidates:
+            - "readlink -f /tmp > /dev/null 2>&1"
+
+    # --- 9. 写脚本前的存在性测试 ---
+    - id: sanity_check
+      description: 写脚本前测试文件 / 目录存在性,跑几个 noop
+      slots:
+        - name: 文件存在
+          candidates:
+            - "test -e /etc/hostname"
+        - name: 目录存在
+          candidates:
+            - "test -d /tmp"
+        - name: 文件类型
+          candidates:
+            - "test -f /etc/passwd"
+        - name: noop
+          candidates:
+            - "true"
+        - name: 空 echo
+          candidates:
+            - "echo > /dev/null"
+        - name: 空 printf
+          candidates:
+            - "printf '' > /dev/null"
+        - name: expand
+          candidates:
+            - "expand /etc/hostname > /dev/null 2>&1"
+
+    # --- 10. 编解码工具操练 ---
+    - id: encoding_drill
+      description: 编码 / 解码工具熟悉(都用 /etc/hostname 作输入,无副作用)
+      slots:
+        - name: base32
+          candidates:
+            - "base32 /etc/hostname | base32 --decode > /dev/null 2>&1"
+        - name: base64
+          candidates:
+            - "base64 /etc/hostname | base64 --decode > /dev/null 2>&1"
+        - name: rev
+          candidates:
+            - "rev /etc/hostname | rev > /dev/null 2>&1"
+        - name: perl
+          candidates:
+            - "perl -ne print /etc/hostname > /dev/null 2>&1"
+        - name: more
+          candidates:
+            - "more /etc/hostname > /dev/null 2>&1"
+
+
+# ============================================================================
+# 攻击 trace 采集(并入本 plan,统一 spec)
+# 每个 A_0 scenario 跑一次,δ 为空 → 纯 attack trace
+# ============================================================================
+attack_collection:
+  scenarios_dir: scenarios/juiceshop
+  per_scenario_runs: 1              # 每个 scenario 跑 1 次
+  delta_commands: []                # δ 为空(纯 attack)
+  delta_positions: []
+  output_dir: detection/data/training_traces/attack/
+
+
+# ============================================================================
+# 产物
+# ============================================================================
+output:
+  benign:
+    strace: detection/data/training_traces/benign.strace
+    proc_snapshot: detection/data/training_traces/benign.proc_snapshot
+    sql: detection/data/training_traces/benign.sql
+  attack:
+    dir: detection/data/training_traces/attack/
+    file_pattern: "{scenario_id}.{strace,proc_snapshot,sql}"
+
+
+# ============================================================================
+# 校验(Acceptance Gate,collect_benign.py 启动前必过)
+# ============================================================================
+validation:
+  command_pool_file: shared/candidate_pool.txt
+  rules:
+    - rule: all_daemon_commands_in_pool
+      desc: daemons[*].commands[*] 全部存在于 candidate_pool.txt
+    - rule: all_scenario_commands_in_pool
+      desc: scenarios.pool[*].slots[*].candidates[*] 全部存在于 candidate_pool.txt
+    - rule: scenario_count_eq_10
+      desc: scenarios.pool 长度 = 10
+    - rule: daemon_count_eq_7
+      desc: daemons 长度 = 7
+    - rule: lcm_periods_lte_window
+      desc: gcd / lcm of daemons[*].period_sec ≤ collection.total_duration_sec

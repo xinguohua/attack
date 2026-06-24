@@ -1,0 +1,35 @@
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Provenance Graph Intrusion Detection.}
+Provenance-based intrusion detection has evolved from feature-engineering approaches to graph neural network (GNN) models.
+Unicorn~\cite{unicorn} extracts histogram-based graph features from provenance graphs, enabling streaming detection without labeled attack data.
+ProvDetector~\cite{provdetector} identifies anomalous execution paths by embedding causal paths and flagging outliers.
+ThreaTrace~\cite{threatrace} formulates detection as a graph-level classification task, assigning threat labels to entire subgraphs.
+ShadeWatcher~\cite{shadewatcher} reframes threat detection as a recommendation problem, training a GNN to predict whether information flows are benign or malicious.
+More recent work has continued to diversify the detection landscape:
+MirGuard~\cite{mirguard} combines noise injection with contrastive learning to improve robustness,
+ProvADShield~\cite{provadshield} employs ensemble strategies across heterogeneous detector families,
+MGDA~\cite{mgda} leverages graph reconstruction losses to surface anomalous substructures, and
+Slot~\cite{slot} applies graph-level reinforcement learning for APT campaign detection.
+The breadth of these approaches---spanning histograms, path embeddings, GNNs, and ensembles---motivates a detector-agnostic evasion strategy.
+\textsc{SafeMimic} is designed and evaluated against both feature-based and GNN-based detectors, making no assumptions about the specific detection architecture.
+
+\paragraph{Adversarial Attacks on Malware Detectors.}
+A growing body of work studies adversarial manipulations that preserve malicious functionality while evading ML classifiers, though each is tailored to a specific artifact type.
+HRAT~\cite{hrat} defines four deterministic atomic operations on function call graphs (FCGs) with predictable structural effects, enabling targeted graph perturbations.
+BagAmmo~\cite{bagammo} injects dead code into Android FCGs via try-catch traps, ensuring that adversarial modifications never execute at runtime.
+However, this paradigm does not transfer to provenance graphs, where every operation executes with real system effects and there is no notion of ``dead'' operations.
+MalGuise~\cite{malguise} constructs a static safe transformation space for PE binaries using semantic NOPs and call-based redividing, demonstrating that safety-first design can achieve high evasion rates.
+\textsc{SafeMimic} extends this safe-space-first paradigm to provenance graphs, but requires \emph{dynamic} safety reasoning---system state evolves with each injected operation, unlike MalGuise's static CPU semantics.
+EvadeDroid~\cite{evadedroid} exploits component isolation in Android apps, where newly added components do not share state with existing ones, a property analogous to \textsc{SafeMimic}'s constraint $S_{\mathit{effect}} \cap S_{\mathit{dep}} = \emptyset$ but specific to the Android domain.
+AdvDroidZero~\cite{advdroiedzero} uses UCB-based exploration to select perturbations without gradient access; such bandit strategies could complement \textsc{SafeMimic}'s greedy selection in future work.
+ProvNinja~\cite{provninja} is the closest prior work, introducing regularity-based camouflage gadgets for provenance graph evasion.
+However, ProvNinja lacks a safety mechanism: it selects operations solely by frequency in benign traces, which can create new frequency anomalies, corrupt attack dependencies, or trigger unintended system side effects---failure modes we formalize and empirically demonstrate in \S\ref{sec:evaluation}.
+
+\paragraph{Adversarial Example Defenses.}
+Defenses against adversarial examples provide additional context for \textsc{SafeMimic}'s design choices.
+HagDe~\cite{hagde} detects adversarial examples by measuring decision boundary instability: inputs that lie close to the classifier's decision boundary exhibit inconsistent predictions under small perturbations.
+This insight motivates \textsc{SafeMimic}'s strategy of gradual distribution shift rather than aggressive perturbation.
+By matching the benign operation distribution via KL-divergence minimization, \textsc{SafeMimic} steers the provenance graph toward the interior of the benign region rather than toward boundary-adjacent areas that adversarial example detectors are designed to flag.
+This distributional approach provides a degree of natural robustness against boundary-based defenses, though we discuss its limitations in \S\ref{sec:discussion}.
