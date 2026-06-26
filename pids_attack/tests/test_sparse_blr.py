@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from attack.grabnel_cmd.surrogate import SparseBLR
+from attack.safemimic_cmd.surrogate import SparseBLR
 
 
 class TestSparseBLR(unittest.TestCase):

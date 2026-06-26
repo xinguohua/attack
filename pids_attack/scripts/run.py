@@ -3,7 +3,7 @@
 
 Two public modules:
     detect  detector data collection, training, diagnostics, and E0
-    attack  attack-time smoke query and GRABNEL attack runs
+    attack  attack-time smoke query and SafeMimic-CMD attack runs
 
 Examples:
     python pids_attack/scripts/run.py detect e0
@@ -196,7 +196,7 @@ def stage_5_convert_to_cdm(trace_path: str):
 def stage_6_detector_predict(sql_path: str, detector_name: str = "orthrus") -> int:
     """detector 拿 CDM SQL 推 y(攻击前的初始推理)."""
     banner("STAGE 6", "_LocalDetector.predict → y ∈ {0,1}  (初始状态,攻击前)")
-    from detection.pidsmaker import _LocalDetector
+    from detection.training.pidsmaker import _LocalDetector
     detector = _LocalDetector(detector_name=detector_name, model_path=None)
 
     nodes = detector.predict_per_node(sql_path)
@@ -269,49 +269,29 @@ def detect_main(argv: Optional[Sequence[str]] = None):
     if not raw or raw[0] in {"-h", "--help"}:
         print("usage: scripts/run.py detect <command> ...\n")
         print("Commands:")
-        print("  collect-benign      collect benign training traces")
-        print("  collect-attack      collect attack traces")
+        print("  collect             collect benign training traces")
         print("  train-gnn           train PIDSMaker GNN detectors")
         print("  train-rules         train G1/G2/G1G2 rule detectors")
-        print("  eval-gnn            evaluate PIDSMaker GNN detectors")
         print("  e0                  run E0 detection baseline")
-        print("  audit               run detection pipeline audit")
-        print("  threshold-sweep     sweep detector thresholds")
         return None
 
     cmd, rest = raw[0], raw[1:]
-    if cmd == "collect-benign":
-        from detection.collect import collect_benign_main
+    if cmd == "collect":
+        from detection.data.collect import collect_benign_main
 
         return collect_benign_main(rest)
-    if cmd == "collect-attack":
-        from detection.collect import collect_attack_main
-
-        return collect_attack_main(rest)
     if cmd == "train-gnn":
-        from detection.pidsmaker import train_main
+        from detection.training.pidsmaker import train_main
 
         return train_main(rest)
     if cmd == "train-rules":
-        from detection.rules import train_rules_main
+        from detection.training.rules import train_rules_main
 
         return train_rules_main(rest)
-    if cmd == "eval-gnn":
-        from detection.pidsmaker import eval_main
-
-        return eval_main(rest)
     if cmd == "e0":
         from experiments.E0_detection.run import main as e0_main
 
         return e0_main(rest)
-    if cmd == "audit":
-        from detection.diagnostics import audit_main
-
-        return audit_main(rest)
-    if cmd == "threshold-sweep":
-        from detection.diagnostics import threshold_sweep_main
-
-        return threshold_sweep_main(rest)
     sys.exit(f"[abort] unknown detect command: {cmd}")
 
 
@@ -321,7 +301,7 @@ def attack_main(argv: Optional[Sequence[str]] = None):
         print("usage: scripts/run.py attack <command> ...\n")
         print("Commands:")
         print("  smoke-query         run one real A0 query through range -> detector")
-        print("  run                 run GRABNEL attack")
+        print("  run                 run SafeMimic-CMD attack")
         return None
 
     cmd, rest = raw[0], raw[1:]
@@ -329,7 +309,7 @@ def attack_main(argv: Optional[Sequence[str]] = None):
         return smoke_query_main(rest)
     if cmd == "run":
         configure_trace_dir()
-        from attack.grabnel_cmd.runner import main as run_attack
+        from attack.safemimic_cmd.runner import main as run_attack
 
         return run_attack(rest, prog="scripts/run.py attack run")
     sys.exit(f"[abort] unknown attack command: {cmd}")

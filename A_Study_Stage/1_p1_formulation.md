@@ -40,15 +40,11 @@ D(T(A_0)) ≠ D(T(A_0 + Δ*))       (1)
 
 尽管命令空间扰动直觉上很简单,但挑战来自下述要求:
 
-**R1: Attack Functional Consistency(攻击功能保持)**。在 manipulation 前后,A_0 attack 须仍执行成功,且攻击命令字符串字面保留。
+**R1: Attack Functional Consistency(攻击功能保持)**。Manipulation 前后,A_0 的攻击语义必须保持。具体地,A_0 原始命令不可被改写、删除或重排;扰动只能作用于额外插入的良性命令 δ。执行层面上,`A_0 + Δ` 必须通过原 attack scenario 的 checker,且最终攻击检查 `final_attack_succeeded=True`。因此,本文的 manipulation 不是替换攻击链,而是在不触碰 A_0 的前提下扩展其执行上下文。
 
-《确保攻击可执行的限制》
+**R2: Executability(可执行性)**。Manipulation 后的完整命令序列 `A_0 + Δ` 必须能在真实 OS / shell 环境中执行出来。加入的 δ 命令必须在当前环境中真实可执行,并且不能破坏 A_0 的运行上下文。这里的"不破坏"包括:不覆盖 A_0 后续需要读取的文件,不关闭或占用 A_0 依赖的 socket / fd,不改变后续命令依赖的 cwd / env / privilege 状态,不阻塞 shell 执行流,不消耗 A_0 所需的一次性资源。否则,即使 δ 在图上看似 benign,`T(A_0 + Δ)` 也无法由真实 OS 执行产生。
 
-《R2:正常命令执行成功-----具体》
-
-《这只是其中一条 你再总结其他》 
-
-**R2: Dependency Modeling for Executability(为可执行而建模依赖)**。Manipulation 必须**显式建模命令之间的依赖关系**。命令间存在多种执行依赖 — c_2 读 c_1 写的文件、c_2 是 c_1 fork-exec 的子进程、c_2 连 c_1 创建的 socket 等;若不显式建模这些依赖,manipulation 在加入 δ 时无法预判:(a) δ 是否破坏 A_0 已有的执行依赖、(b) δ 自身的依赖前提是否被满足 — 两者都可能让 `A_0 + Δ` 命令序列在 OS 上**执行失败**,manipulation 在物理上不成立。
+为满足 R2,manipulation 需要显式建模命令之间的依赖关系,用来判断 δ 能否加入以及能加在哪里。命令间存在多种执行依赖:后续命令读取前序命令写出的文件,子命令由父命令 fork-exec 派生,网络命令连接前序命令启动的 socket 等。若不建模这些依赖,manipulation 无法预判:(a) δ 是否破坏 A_0 已有依赖;(b) δ 自身的前置资源是否已就绪;(c) Move / Remove / Rewrite 是否会让已有 δ 或 A_0 失去输入。依赖建模的目的不是复刻完整 OS 语义,而是在搜索空间中排除明显不可执行的扰动。
 
 已有 PIDS 域 manipulation 方法概述:
 
@@ -62,7 +58,9 @@ D(T(A_0)) ≠ D(T(A_0 + Δ*))       (1)
 
 ### §4.2 The proposed manipulation method(我们所提出的 manipulation 方法)
 
-我们在此设计一种新的命令空间 manipulation 方法。根据 R1,我们不能修改 A_0 任何元素,只能通过添加良性 δ 命令扩展 attack scenario;根据 R2,manipulation 须显式建模命令间依赖以保 `A_0 + Δ` 在 OS 上可执行。在 R1 + R2 共同约束下,命令空间 manipulation 形式化为**良性命令空间上的搜索问题** — 在良性命令库 `L` 与参数空间 `Args` 上,搜索 `Δ ⊆ L × Args`,使 detector 对攻击节点的判定翻转。剩下的问题是:**(1)** δ 候选库从何而来;**(2)** 命令之间的依赖与执行序如何形式化建模为可搜索的图;**(3)** 在该图上如何定义 atomic 变异算子并真实施加到 attack scenario。本节回答这三个问题;desirable Δ 的选取(即搜索算法本身)留作后续工作(§5)。
+我们在此设计一种新的命令空间 manipulation 方法。根据 R1,A_0 是 immutable 的:原攻击命令不可被修改、移动或删除。搜索算法只能创建和修改 δ 命令。根据 R2,δ 必须能在真实 shell 中执行,且其插入、移动、改写、删除都不能破坏 A_0 的执行依赖。在这些约束下,命令空间 manipulation 形式化为**良性命令空间上的可执行扰动搜索问题** — 在良性命令库 `L` 与参数空间 `Args` 上,搜索 `Δ ⊆ L × Args`,使 detector 对攻击节点的判定翻转。
+
+本节只定义 manipulation space,不定义最终搜索算法。具体回答三个问题:**(1)** δ 候选库如何构建;(2) 命令之间的依赖与执行序如何形式化建模;(3) 如何定义 atomic 变异算子,并把这些算子落到真实 shell 命令序列上。
 
 **(1) Candidate δ 命令库。** 在 syscall→CDM 标准映射下,subject 节点的邻接边只有 3 种类型:`subject → file`(由 `EVENT_OPEN / READ / WRITE / EXECUTE` 产生)、`subject → netflow`(由 `EVENT_CONNECT / SENDTO / RECVFROM` 产生)、`subject → subject`(由 `EVENT_CLONE` 产生)。据此,我们把 candidate δ 分为 3 类:
 
@@ -70,13 +68,11 @@ D(T(A_0)) ≠ D(T(A_0 + Δ*))       (1)
 - **② Network-touching 类**:Linux 网络工具(`curl`、`wget`、`nc`、`ncat`、`ssh`、`openssl s_client`、`python urllib` 等)。其 args 含 socket addr,真跑后产生 `subject → netflow` 邻接边。
 - **③ Fork-exec 类**:Linux/Unix 中"运行另一个程序"的标准 launcher,通过 `clone() + execve()` 原子机制 wrap 另一条命令做 fork-exec(`nice`、`time`、`env`、`sudo`、`nohup`、`setsid`、`unshare`、`taskset`、`ionice`、`chrt`、`bash -c`、`sh -c`、`find -exec`、`parallel`、`xargs`、`python -c "subprocess.run(...)"` 等)。其 args 含被 wrap 的 target 命令,真跑后 launcher 作为 parent subject 跟 target child subject 之间产生 `subject → subject` CLONE 邻接边(若 target 内又含命令链,则产生多级 CLONE 链)。
 
-《良性命令库的构建得有理由 确保搜索范围是合理的 》
+候选库需要满足四个筛选原则。第一,来源必须是攻击者可获得的公开或本地可观测信息,不能依赖 defender 的 benign workload、training traces 或 detector 内部数据。第二,命令模板必须 non-destructive,不得修改目标应用状态、覆盖 A_0 资源、改变后续 shell state 或要求提权。第三,命令必须可参数化,使搜索算法能选择 file path、socket addr 或 wrapped target。第四,命令必须能稳定映射到 CDM 中可观察的邻接类型,否则无法形成可控 manipulation。
 
-库的具体来源:**GTFOBins**([gtfobins.github.io](https://gtfobins.github.io/))的 File-read 子集,**Atomic Red Team**([atomicredteam.io](https://atomicredteam.io/))的 Discovery 类技术(MITRE ATT&CK T1082/T1083/T1018/T1049/T1033 等),以及 **GNU coreutils / procps-ng / util-linux / iproute2 / bash builtin 官方 manpages** 中文档化的标准查询用法。所有命令都在 baseline 训练分布常见,自身不会成为新 anomaly。
+δ pool 的来源采用攻击者可用的两类公开信息,职能正交。**(i) Linux man pages**([man7.org](https://man7.org/linux/man-pages/))提供目标运行环境中合法系统工具的**完整词表与官方调用语法**,覆盖 **GNU coreutils / procps-ng / util-linux / iproute2 / net-tools / findutils / bash builtin / wget / clamav** 等系统包;攻击者通过 `command -v`、`--help`、dry-run 等方式确认这些工具在目标环境可执行。**(ii) GTFOBins**([gtfobins.github.io](https://gtfobins.github.io/))的 File-read 子集提供**按 syscall 副作用归类的命令注释** —— 该清单标注了哪些合法二进制能稳定触发 OPEN/READ syscall,man pages 本身按命令功能归类(文本处理、网络、进程管理)不提供 syscall 级行为分类,GTFOBins 弥补这一空缺,使得 ①类 file-touching 候选可按 syscall footprint 精确预筛。该两类来源选择呼应 SPECTRA [Shoaib et al. S&P'25] §7 对 Linux 命令空间逃逸应取自 man pages + GTFOBins 的论断。**参数来源**来自攻击者在 A_0 与公开环境中可观察到的资源,例如标准系统文件(`/etc/os-release`,`/etc/hostname`,`/proc/*`)、公开本地服务端点(`127.0.0.1:3000` 的 GET/health-check 类请求)、以及 A_0 已经使用过但只读访问不会改变攻击状态的 file / socket 标识。最终 δ pool 必须逐条记录 source tag、语义类别、参数模板、攻击者如何获得该模板/参数、non-destructive 理由、dry-run 结果和被排除原因。
 
-《命令依赖图查新》
-
-**(2) 命令依赖图 `G = (V_C, E_res, E_spawn, E_seq)`。** 节点 V_C 通过 E_seq 形成全序(执行序的"时间层"),通过 E_res 与 E_spawn 承载命令之间的依赖层。两类信息共存于单一图G, 
+**(2) 命令依赖图 `G = (V_C, E_res, E_spawn, E_seq)`。** 节点 V_C 通过 E_seq 形成全序(执行序的"时间层"),通过 E_res 与 E_spawn 承载命令之间的依赖层。两类信息共存于单一图 G,用于判断某个 δ 是否能加入、能放在哪里,以及后续 Rewrite / Move / Remove 是否仍保持可执行。
 
 **节点 `V_C`(三要素属性)**:每条 shell 命令一个节点,属性 `(cmd_name, args, outputs)`，从 args / outputs 提取的资源标识符分别记为 `R_in(c)` 与 `R_out(c)`,命令 c 涉及的全部资源集为 `R(c) = R_in(c) ∪ R_out(c) ⊆ Resources`(file 用 path 表示,netflow 用 (ip, port) 表示):
 
@@ -89,13 +85,11 @@ D(T(A_0)) ≠ D(T(A_0 + Δ*))       (1)
 - **`E_spawn ⊆ V_C × V_C`(派生依赖)**:`(c_1, c_2) ∈ E_spawn` 当 c_1 通过 fork-exec 启动 c_2,即 OS 进程层的 parent-child 关系。
 - **`E_seq ⊆ V_C × V_C`(执行序边)**:`(c_1, c_2) ∈ E_seq` 当 c_1 在 shell 执行序中**紧邻** c_2 之前。V_C 上的 E_seq 形成 chain(每节点入度 / 出度 ≤ 1),给出 V_C 的全序。
 
-**可执行约束(R2)**:E_seq chain 的顺序必须 respect 由 `E_res` 数据流子型 + `E_spawn` 导出的 partial order(producer 先于 consumer,parent 先于 child);违反则 `A_0 + Δ` 在 OS 上不可执行。
+**可执行约束。** E_seq chain 的顺序必须 respect 由 `E_res` 数据流子型 + `E_spawn` 导出的 partial order(producer 先于 consumer,parent 先于 child)。此外,任何 δ 不得写入 A_0 后续读取的资源,不得改变 A_0 依赖的 shell state,不得引入阻塞命令。若违反这些约束,对应变异被拒绝。
 
+> TODO-1(并入 §6 攻击消融):本节的可执行约束通过攻击消融而非独立实验验证,体现为两个并列指标:**(a) 攻击完整性** —— `all_steps_passed`、`final_attack_succeeded`(R1);**(b) δ 命令可执行性** —— `δ 命令成功率`、阻塞/超时率、资源冲突率(R2)。若关闭依赖图后 (a) 或 (b) 显著下降,则依赖图建模对 R2 是必要的。
 
-
-《确保命令加减能保持命令执行成功 你这个命令依赖图有用么 变异你确保能执行成功 》
-
-**(3) Atomic 变异算子。** 在 `G` 上定义 4 个 atomic 算子,作用于 `V_C \ V_C^0`(不动攻击命令),共同后置约束:结果图 G' 必须仍满足 partial order(E_seq chain respects `E_res^{dataflow} ∪ E_spawn`),否则算子拒绝执行解决R2。
+**(3) Atomic 变异算子。** 在 `G` 上定义 4 个 atomic 算子。令 `V_C^0` 表示 A_0 的原始命令节点。所有算子只作用于 `V_C \ V_C^0`,即只编辑 δ,不编辑 A_0。共同后置约束是:结果图 G' 必须仍满足上述可执行约束;否则算子拒绝执行。
 
 **算子 1 — `Add(δ_cmd, δ_args, e)`**(对应 FCGHunter Add Node):加新命令节点 δ,插入 E_seq 链上 `e = (c_prev, c_next)` 处。输入 `δ_cmd ∈ L`、`δ_args ∈ Args(δ_cmd)`、`e ∈ E_seq`。新节点 δ 的属性 `(cmd_name = δ_cmd, args = δ_args, outputs = derive(δ_cmd, δ_args))`,由此派生 `R_in(δ), R_out(δ), R(δ)`。状态转移:
 
@@ -138,9 +132,11 @@ E_res   ← E_res \ { edges incident to δ }
 E_spawn ← E_spawn \ { edges incident to δ }
 ```
 
+> TODO-2(并入 §6 攻击消融):4 个 atomic 算子的角色通过攻击消融的**变异搜索**视角验证 — 即在攻击搜索过程中,搜索算法能否真正利用这 4 个算子找到有效 δ,且每个算子是否**独立贡献**。Ablation 关闭算子子集对比:**(i) Add-only**、**(ii) Add + Rewrite**、**(iii) Add + Rewrite + Move**、**(iv) 全 4 算子**。若关闭 Rewrite / Move / Remove 后攻击 SR 显著下降或 query 数显著上升,则该算子是独立扰动 primitive(搜索真的需要它);若不显著,则它仅是搜索过程中的参数调整 / 位置调整 / 撤销机制,可以从 primitive 集合中合并或剔除。
 
 
-**Translating Command-Graph Mutation to Shell-Level Perturbation**(把命令图变异翻译成 shell 层扰动)。It is essential to convert command-dependency-graph mutations into shell-level perturbations,即把 G 上的 4 个 atomic 算子分别落到 attack scenario 真实可跑的 shell 命令序列上,既维持 A_0 字面与执行成功(R1),也使所有命令在 OS 上可实现(R2)。
+
+**Translating Command-Graph Mutation to Shell-Level Perturbation**(把命令图变异翻译成 shell 层扰动)。It is essential to convert command-dependency-graph mutations into shell-level perturbations,即把 G 上的 4 个 atomic 算子分别落到 attack scenario 真实可跑的 shell 命令序列上。翻译后的执行链必须满足:原 A_0 命令字面不变、A_0 checker 仍通过、δ 命令在 strace/CDM 中产生可观察 footprint。
 
 **`Add(δ_cmd, δ_args, e)` 落到 shell。** 在 attack scenario 的 shell 命令序列中,找到 E_seq 链上 `e = (c_prev, c_next)` 对应的位置(c_prev 之后、c_next 之前),插入一行 `δ_cmd δ_args`;**算子的 partial order 后置约束自动保证 δ 真跑时其资源依赖已就绪** — 若 δ 是 producer-consumer 链中的 consumer,则 producer 已先于 δ 执行;若 δ 是 fork-exec child,则 parent 已先启动。该行的具体形式由 δ_cmd 所属的 3 类候选库(承 (1))决定:**① File-touching 类**形如 `cat <file_path> > /dev/null 2>&1` 或 `stat <file_path>`,真跑产生 OPEN / READ syscall,翻译为 subject → file 邻接边;**② Network-touching 类**形如 `curl -s http://<host>:<port>/` 或 `nc -z <host> <port>`,真跑产生 CONNECT / SENDTO syscall,翻译为 subject → netflow 邻接边;**③ Fork-exec 类**形如 `nice <target>`、`sudo <target>`、`nohup <target>`、`bash -c '<target>'`、`find <p> -exec <target> \;` 等(target 为被 wrap 的命令),真跑时 launcher 通过 `clone() + execve()` 产生 CLONE syscall,翻译为 launcher 与 target 间的 subject → subject 邻接边。
 
@@ -150,10 +146,4 @@ E_spawn ← E_spawn \ { edges incident to δ }
 
 **`Remove(δ)` 落到 shell。** 从 shell 命令序列中直接删除 δ 对应的那行命令 — 适用全部 3 类库。
 
-
-
----
-
-todo
-
-- 4.定义好优化函数 在这考虑规则怎么办  有改的这种变异方式 欺骗 ids 不被 rule-base
+本节 manipulation 设计的验证(候选命令的 footprint 稳定性、dependency-aware placement 价值、4 个算子的角色)并入 §6 攻击消融,不作为独立实验。最终如何组合这些 primitive 生成 `Δ*` 属于 §5 搜索算法。

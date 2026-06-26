@@ -49,22 +49,22 @@ class TestExtractPath(unittest.TestCase):
     """_extract_path: 抠 subject / file / netflow 的稳定 ID."""
 
     def test_subject_path(self):
-        from attack.oracle import _extract_path
+        from attack.framework.oracle import _extract_path
         self.assertEqual(
             _extract_path("subject /usr/bin/curl curl -s -i http://localhost:3000/"),
             "/usr/bin/curl",
         )
 
     def test_file_path(self):
-        from attack.oracle import _extract_path
+        from attack.framework.oracle import _extract_path
         self.assertEqual(_extract_path("file /etc/passwd"), "/etc/passwd")
 
     def test_netflow(self):
-        from attack.oracle import _extract_path
+        from attack.framework.oracle import _extract_path
         self.assertEqual(_extract_path("netflow 127.0.0.1 3000"), "127.0.0.1:3000")
 
     def test_empty(self):
-        from attack.oracle import _extract_path
+        from attack.framework.oracle import _extract_path
         self.assertEqual(_extract_path(""), "")
 
 
@@ -72,7 +72,7 @@ class TestComputeNodeMetrics(unittest.TestCase):
     """v7 _compute_node_metrics:关键词驱动 + baseline_gt_keys 双锁定."""
 
     def test_no_gt_keywords_returns_none(self):
-        from attack.oracle import _compute_node_metrics
+        from attack.framework.oracle import _compute_node_metrics
         nodes = [
             {"node": 1, "label": "subject /usr/bin/curl curl ...", "y_pred": 1, "score": 5.0},
             {"node": 2, "label": "subject /usr/bin/bash bash ...", "y_pred": 0, "score": 1.0},
@@ -84,7 +84,7 @@ class TestComputeNodeMetrics(unittest.TestCase):
 
     def test_keyword_match_no_baseline(self):
         """有 gt_keywords 但没 baseline_gt_keys → 当前 trace 即 baseline,持久率 1.0."""
-        from attack.oracle import _compute_node_metrics
+        from attack.framework.oracle import _compute_node_metrics
         nodes = [
             {"node": 1, "label": "subject /usr/bin/curl curl ... http://localhost:3000/", "y_pred": 1, "score": 6.0},
             {"node": 2, "label": "subject /usr/bin/head head -30", "y_pred": 1, "score": 6.0},
@@ -95,7 +95,7 @@ class TestComputeNodeMetrics(unittest.TestCase):
 
     def test_keyword_no_flagged_match_is_zero_persistence(self):
         """有 gt_keywords 但当前没有 flagged GT node → attack-node oracle 已避开."""
-        from attack.oracle import _compute_node_metrics
+        from attack.framework.oracle import _compute_node_metrics
         nodes = [
             {"node": 1, "label": "subject /usr/bin/curl curl ... http://localhost:3000/", "y_pred": 0, "score": 0.1},
             {"node": 2, "label": "subject /usr/bin/head head -30", "y_pred": 1, "score": 6.0},
@@ -106,7 +106,7 @@ class TestComputeNodeMetrics(unittest.TestCase):
 
     def test_full_persistence_with_baseline(self):
         """baseline GT 节点全部仍命中 + flagged → 持久率 1.0,delta_score = 0."""
-        from attack.oracle import _compute_node_metrics
+        from attack.framework.oracle import _compute_node_metrics
         nodes = [
             {"node": 1, "label": "subject /usr/bin/curl curl ... http://localhost:3000/", "y_pred": 1, "score": 6.0},
             {"node": 2, "label": "subject /usr/bin/setsid setsid curl ... http://localhost:3000/", "y_pred": 1, "score": 6.0},  # 新加 wrapper
@@ -124,7 +124,7 @@ class TestComputeNodeMetrics(unittest.TestCase):
 
     def test_partial_persistence_baseline_node_dropped(self):
         """baseline 时 2 个 GT,变异后只剩 1 个(另一个 path 不再 flagged)→ 持久率 0.5."""
-        from attack.oracle import _compute_node_metrics
+        from attack.framework.oracle import _compute_node_metrics
         nodes = [
             {"node": 1, "label": "subject /usr/bin/curl curl ... http://localhost:3000/", "y_pred": 1, "score": 5.5},
             # /usr/bin/bash 节点不见了(或 y_pred=0)
@@ -145,7 +145,7 @@ class TestComputeNodeMetrics(unittest.TestCase):
 
     def test_wrapper_does_not_break_match(self):
         """加 wrapper 改 cmd 不影响 (path, keyword) 命中 — 关键 bug fix 验证."""
-        from attack.oracle import _compute_node_metrics
+        from attack.framework.oracle import _compute_node_metrics
         nodes_before = [
             {"node": 1, "label": "subject /usr/bin/curl curl -s -i http://localhost:3000/", "y_pred": 1, "score": 6.0},
         ]

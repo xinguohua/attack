@@ -10,7 +10,7 @@ For each scenario:
     4. each detector runs on the same mixed clean.strace.sql and returns per-node
        predictions.
     5. metrics compare GT nodes against detector flagged nodes using
-       Orthrus-style TP/FP/TN/FN, Precision, and MCC.
+       Orthrus-style TP/FP/TN/FN, Precision, Recall, and MCC.
 
 The marker lines are stripped before detector inference. E0 intentionally uses
 no scenario keyword GT and no noise filter.
@@ -22,25 +22,37 @@ import csv
 import json
 import math
 import re
+import shutil
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from experiments.E0_detection.collector import (
+from experiments.E0_detection.collect import (
     e0_collect_attack_only_scenario,
     e0_collect_scenario,
 )
-from experiments.E0_detection.gt_signature import (
+from experiments.E0_detection.gt import (
     GT_SOURCE,
     SIGNATURE_VERSION,
     TRACE_MODE,
     load_signature_sets,
 )
-from attack.oracle import PIDSOracle
+from attack.framework.oracle import PIDSOracle
+from experiments.E0_detection.metrics import (
+    _gt_sets,
+    _mcc,
+    _node_precision,
+    _sql_node_catalog,
+    _write_csv,
+    _write_orthrus_summary,
+    compute_metrics,
+)
+from detection.inference.registry import save_detector_artifacts_best
 
 
 GNN_DETECTORS = ("magic", "orthrus", "threatrace")
@@ -55,12 +67,23 @@ DEFAULT_DETECTORS = DETECTORS
 DEFAULT_WARMUP_SEC = 10
 DEFAULT_COOLDOWN_SEC = 20
 SCENARIO_DIR = PROJECT_ROOT / "scenarios" / "juiceshop"
-RESULT_DIR = PROJECT_ROOT / "experiments" / "E0_detection" / "results_window"
-RULE_ARTIFACT_DIR = PROJECT_ROOT / "detection" / "data" / "hybrid_rules"
+TEST_DATA_DIR = PROJECT_ROOT / "experiments" / "E0_detection" / "test_data"
+RESULT_DIR = PROJECT_ROOT / "experiments" / "E0_detection" / "results"
+DETECTOR_ARTIFACT_ROOT = PROJECT_ROOT / "detection" / "artifacts"
+PIDSMAKER_ARTIFACT_ROOT = PROJECT_ROOT / "detection" / "training" / "artifacts"
+RULE_ARTIFACT_DIR = DETECTOR_ARTIFACT_ROOT
 HYBRID_BASE_GNN = {
     "magic_g1g2": "magic",
     "orthrus_g1g2": "orthrus",
     "threatrace_g1g2": "threatrace",
+}
+RULE_COMPONENTS = {
+    "g1": ("g1",),
+    "g2": ("g2",),
+    "g1g2": ("g1", "g2"),
+    "magic_g1g2": ("g1", "g2"),
+    "orthrus_g1g2": ("g2",),
+    "threatrace_g1g2": ("g2",),
 }
 GNN_REQUIRED_ARTIFACTS = {
     "magic": ("state_dict.pkl", "threshold.pkl", "train_distance.txt"),
@@ -68,6 +91,7 @@ GNN_REQUIRED_ARTIFACTS = {
     "threatrace": ("state_dict.pkl", "threshold.pkl"),
 }
 RULE_REQUIRED_ARTIFACTS = ("g1_rule.pkl", "g2_rule.pkl")
+DETECTOR_CLASSES = ("gnn", "rule", "hybrid")
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -96,7 +120,29 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="rebuild attack_only/attack_gt_signature.json before fresh mixed collection",
     )
+    ap.add_argument(
+        "--output-dir",
+        default=str(RESULT_DIR),
+        help="E0 result directory (default: experiments/E0_detection/results)",
+    )
+    ap.add_argument(
+        "--test-data-dir",
+        default=str(TEST_DATA_DIR),
+        help="E0 test data directory (default: experiments/E0_detection/test_data)",
+    )
+    ap.add_argument(
+        "--no-runtime-update",
+        action="store_true",
+        help="write E0 results only; do not update detection/artifacts manifests",
+    )
     return ap.parse_args(argv)
+
+
+def _resolve_output_dir(value: str) -> Path:
+    path = Path(value)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path
 
 
 def load_scenarios(whitelist: Optional[List[str]] = None) -> List[Dict[str, Any]]:
@@ -126,8 +172,16 @@ def _needs_rule_artifacts(detectors: Iterable[str]) -> bool:
     return any(name in RULE_DETECTORS or name in HYBRID_DETECTORS for name in detectors)
 
 
+def _rule_artifact_path(rule_dir: Path, filename: str) -> Path:
+    if filename == "g1_rule.pkl":
+        return Path(rule_dir) / "g1" / filename
+    if filename == "g2_rule.pkl":
+        return Path(rule_dir) / "g2" / filename
+    return Path(rule_dir) / filename
+
+
 def _gnn_best_model_dir(detector_name: str) -> Path:
-    from detection.pidsmaker import PIDSMAKER_DIR, _build_args, _get_yml_cfg_safe
+    from detection.training.pidsmaker import PIDSMAKER_DIR, _build_args, _get_yml_cfg_safe
 
     if PIDSMAKER_DIR not in sys.path:
         sys.path.insert(0, PIDSMAKER_DIR)
@@ -153,7 +207,7 @@ def _missing_detector_artifacts(
 
     if _needs_rule_artifacts(detectors):
         for filename in RULE_REQUIRED_ARTIFACTS:
-            path = Path(rule_dir) / filename
+            path = _rule_artifact_path(Path(rule_dir), filename)
             if not path.exists():
                 missing.append(f"rule: missing {path}")
 
@@ -193,264 +247,192 @@ def assert_detector_artifacts_ready(
     raise SystemExit("\n".join(lines))
 
 
-_INSERT_SUBJECT_RE = re.compile(
-    r"INSERT INTO subject_node_table\s*\([^)]+\)\s*VALUES\s*"
-    r"\('([^']*)',\s*'([^']*)',\s*'((?:[^'\\]|\\.)*)',\s*'((?:[^'\\]|\\.)*)',\s*(\d+)\)",
-    re.IGNORECASE,
-)
-_INSERT_FILE_RE = re.compile(
-    r"INSERT INTO file_node_table\s*\([^)]+\)\s*VALUES\s*"
-    r"\('([^']*)',\s*'([^']*)',\s*'((?:[^'\\]|\\.)*)',\s*(\d+)\)",
-    re.IGNORECASE,
-)
-_INSERT_NETFLOW_RE = re.compile(
-    r"INSERT INTO netflow_node_table\s*\([^)]+\)\s*VALUES\s*"
-    r"\('([^']*)',\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*(\d+)\)",
-    re.IGNORECASE,
-)
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"true", "1", "yes", "y"}
 
 
-def _unescape_sql_value(value: str) -> str:
-    return value.replace("''", "'").replace("\\\\", "\\")
+def _float_or_none(value: Any) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
-def _sql_node_catalog(sql_path: Path) -> Dict[int, Dict[str, Any]]:
-    """Map SQL index_id back to readable node metadata for evidence files."""
-    text = Path(sql_path).read_text(errors="ignore")
-    catalog: Dict[int, Dict[str, Any]] = {}
-
-    for m in _INSERT_SUBJECT_RE.finditer(text):
-        _uuid, hash_id, path, cmd, idx = m.groups()
-        index_id = int(idx)
-        path = _unescape_sql_value(path)
-        cmd = _unescape_sql_value(cmd)
-        catalog[index_id] = {
-            "node_type": "subject",
-            "hash_id": hash_id,
-            "path": path,
-            "cmd": cmd,
-            "label": f"{path} | {cmd}".strip(),
-        }
-
-    for m in _INSERT_FILE_RE.finditer(text):
-        _uuid, hash_id, path, idx = m.groups()
-        index_id = int(idx)
-        path = _unescape_sql_value(path)
-        catalog[index_id] = {
-            "node_type": "file",
-            "hash_id": hash_id,
-            "path": path,
-            "cmd": "",
-            "label": path,
-        }
-
-    for m in _INSERT_NETFLOW_RE.finditer(text):
-        _uuid, hash_id, src_addr, src_port, dst_addr, dst_port, idx = m.groups()
-        index_id = int(idx)
-        local = f"{src_addr}:{src_port}" if (src_addr or src_port) else ""
-        remote = f"{dst_addr}:{dst_port}"
-        label = f"{local}->{remote}" if local else remote
-        catalog[index_id] = {
-            "node_type": "netflow",
-            "hash_id": hash_id,
-            "path": "",
-            "cmd": "",
-            "label": label,
-        }
-
-    return catalog
+def _detector_type(detector: str) -> str:
+    if detector in GNN_DETECTORS:
+        return "gnn"
+    if detector in RULE_DETECTORS:
+        return "rule"
+    if detector in HYBRID_DETECTORS:
+        return "hybrid"
+    return "unknown"
 
 
-def _gt_sets(gt: Dict[str, Any]) -> Tuple[Set[int], Set[int], Set[int], Set[int]]:
-    gt_subj = {int(x) for x in gt.get("gt_subject_index_ids", [])}
-    gt_file = {int(x) for x in gt.get("gt_file_index_ids", [])}
-    gt_net = {int(x) for x in gt.get("gt_netflow_index_ids", [])}
-    gt_total = gt_subj | gt_file | gt_net
-    return gt_subj, gt_file, gt_net, gt_total
+def _required_rule_files(detector: str) -> Tuple[str, ...]:
+    if detector == "g1":
+        return ("g1_rule.pkl",)
+    if detector == "g2":
+        return ("g2_rule.pkl",)
+    if detector in RULE_DETECTORS or detector in HYBRID_DETECTORS:
+        return RULE_REQUIRED_ARTIFACTS
+    return ()
 
 
-def _flagged_ids(nodes_info: Iterable[Dict[str, Any]]) -> Set[int]:
-    flagged: Set[int] = set()
-    for nd in nodes_info:
-        index_id = nd.get("node_index_id")
-        if index_id is None:
-            continue
-        if int(nd.get("y_pred", 0)) == 1:
-            flagged.add(int(index_id))
-    return flagged
-
-
-def _node_precision(tp: int, fp: int) -> Optional[float]:
-    den = tp + fp
-    return (tp / den) if den else None
-
-
-def _mcc(tp: int, fp: int, tn: int, fn: int) -> Optional[float]:
-    den = (tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)
-    return ((tp * tn - fp * fn) / math.sqrt(den)) if den else None
-
-
-def _node_record(
-    nodes_by_id: Dict[int, Dict[str, Any]],
-    catalog: Dict[int, Dict[str, Any]],
-    index_id: int,
-) -> Dict[str, Any]:
-    nd = nodes_by_id.get(index_id, {})
-    meta = catalog.get(index_id, {})
-    return {
-        "node_index_id": index_id,
-        "node_type": meta.get("node_type", "unknown"),
-        "label": meta.get("label", nd.get("label", "")),
-        "score": float(nd.get("score", 0.0)),
-        "y_pred": int(nd.get("y_pred", 0)),
-        "path": meta.get("path", ""),
-        "cmd": meta.get("cmd", ""),
-    }
-
-
-def _sort_records(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    return sorted(
-        records,
-        key=lambda r: (
-            -float(r.get("score", 0.0)),
-            r.get("node_type", ""),
-            r.get("node_index_id", -1),
-        ),
-    )
-
-
-def compute_metrics(
-    nodes_info: List[Dict[str, Any]],
-    gt: Dict[str, Any],
-    node_catalog: Dict[int, Dict[str, Any]],
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Compute Orthrus-style node-level GT-vs-flagged metrics.
-
-    TP/FP/TN/FN are over node ids. Precision and MCC follow the
-    Orthrus-style node-level table used for the E0 paper result.
-    """
-    nodes_by_id = {
-        int(nd["node_index_id"]): nd
-        for nd in nodes_info
-        if nd.get("node_index_id") is not None
-    }
-    flagged_ids = _flagged_ids(nodes_info)
-    _gt_subj, _gt_file, _gt_net, gt_total = _gt_sets(gt)
-
-    gt_flagged = flagged_ids & gt_total
-    gt_missed = gt_total - flagged_ids
-    flagged_outside_gt = flagged_ids - gt_total
-    all_nodes_count = int(gt.get("all_node_count", {}).get("total", 0) or 0)
-    gt_count = len(gt_total)
-    tp = len(gt_flagged)
-    fp = len(flagged_outside_gt)
-    fn = len(gt_missed)
-    tn = max(0, all_nodes_count - tp - fp - fn)
-
-    metrics = {
-        "all_nodes_count": all_nodes_count,
-        "flagged_count": len(flagged_ids),
-        "gt_count": gt_count,
-        "tp": tp,
-        "fp": fp,
-        "tn": tn,
-        "fn": fn,
-        "node_precision": _node_precision(tp, fp),
-        "mcc": _mcc(tp, fp, tn, fn),
-    }
-
-    evidence = {
-        "gt_nodes": _sort_records([
-            _node_record(nodes_by_id, node_catalog, i) for i in gt_total
-        ]),
-        "flagged_nodes": _sort_records([
-            _node_record(nodes_by_id, node_catalog, i) for i in flagged_ids
-        ]),
-        "gt_flagged_nodes": _sort_records([
-            _node_record(nodes_by_id, node_catalog, i) for i in gt_flagged
-        ]),
-        "gt_missed_nodes": _sort_records([
-            _node_record(nodes_by_id, node_catalog, i) for i in gt_missed
-        ]),
-        "flagged_outside_gt_nodes": _sort_records([
-            _node_record(nodes_by_id, node_catalog, i) for i in flagged_outside_gt
-        ]),
-    }
-
-    return metrics, evidence
-
-
-_SUMMARY_KEYS = [
-    "scenario_id",
-    "detector",
-    "valid",
-    "all_steps_passed",
-    "final_attack_succeeded",
-    "all_nodes_count",
-    "flagged_count",
-    "gt_count",
-    "tp",
-    "fp",
-    "tn",
-    "fn",
-    "node_precision",
-    "mcc",
-    "wall_sec",
-    "failed_step",
-    "gt_source",
-]
-
-_ORTHRUS_SUMMARY_KEYS = [
-    "Scenario",
-    "System",
-    "TP",
-    "FP",
-    "TN",
-    "FN",
-    "Precision",
-    "MCC",
-]
-
-
-def _write_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=_SUMMARY_KEYS)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({k: row.get(k) for k in _SUMMARY_KEYS})
-
-
-def _write_orthrus_summary(path: Path, rows: List[Dict[str, Any]]) -> None:
-    out_rows: List[Dict[str, Any]] = []
-    for row in rows:
-        scenario_id = str(row.get("scenario_id", ""))
-        det = str(row.get("detector", ""))
-        if not scenario_id or not det:
-            continue
+def _per_scenario_metrics(det_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for row in sorted(det_rows, key=lambda r: str(r.get("scenario_id", ""))):
         tp = int(row.get("tp") or 0)
         fp = int(row.get("fp") or 0)
         tn = int(row.get("tn") or 0)
         fn = int(row.get("fn") or 0)
         precision = _node_precision(tp, fp)
-        mcc = _mcc(tp, fp, tn, fn)
-        out_rows.append({
-            "Scenario": scenario_id,
-            "System": det,
-            "TP": tp,
-            "FP": fp,
-            "TN": tn,
-            "FN": fn,
-            "Precision": precision if precision is not None else "",
-            "MCC": mcc if mcc is not None else "",
+        recall = (tp / (tp + fn)) if (tp + fn) else None
+        out.append({
+            "scenario_id": row.get("scenario_id", ""),
+            "mcc": _mcc(tp, fp, tn, fn),
+            "precision": precision,
+            "recall": recall,
+            "tp": tp,
+            "fp": fp,
+            "tn": tn,
+            "fn": fn,
+            "flagged_count": int(row.get("flagged_count") or 0),
+            "gt_count": int(row.get("gt_count") or 0),
+            "all_nodes_count": int(row.get("all_nodes_count") or 0),
+            "wall_sec": float(row.get("wall_sec") or 0.0),
         })
+    return out
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=_ORTHRUS_SUMMARY_KEYS)
-        writer.writeheader()
-        for row in out_rows:
-            writer.writerow({k: row.get(k) for k in _ORTHRUS_SUMMARY_KEYS})
+
+def _aggregate_detector_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+
+    by_detector: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        detector = str(row.get("detector", ""))
+        if detector:
+            by_detector.setdefault(detector, []).append(row)
+
+    out: List[Dict[str, Any]] = []
+    for detector, det_rows in by_detector.items():
+        tp = sum(int(r.get("tp") or 0) for r in det_rows)
+        fp = sum(int(r.get("fp") or 0) for r in det_rows)
+        tn = sum(int(r.get("tn") or 0) for r in det_rows)
+        fn = sum(int(r.get("fn") or 0) for r in det_rows)
+        precision = _node_precision(tp, fp)
+        recall = (tp / (tp + fn)) if (tp + fn) else None
+        mcc = _mcc(tp, fp, tn, fn)
+        per_scenario = _per_scenario_metrics(det_rows)
+        scenario_mccs = [
+            float(item["mcc"]) for item in per_scenario if item.get("mcc") is not None
+        ]
+        macro_mcc = (
+            sum(scenario_mccs) / len(scenario_mccs)
+            if scenario_mccs else None
+        )
+        out.append({
+            "detector": detector,
+            "detector_type": _detector_type(detector),
+            "scenario_count": len(det_rows),
+            "valid_count": sum(_truthy(r.get("valid")) for r in det_rows),
+            "all_steps_passed_count": sum(_truthy(r.get("all_steps_passed")) for r in det_rows),
+            "final_attack_succeeded_count": sum(_truthy(r.get("final_attack_succeeded")) for r in det_rows),
+            "all_nodes_count": sum(int(r.get("all_nodes_count") or 0) for r in det_rows),
+            "flagged_count": sum(int(r.get("flagged_count") or 0) for r in det_rows),
+            "gt_count": sum(int(r.get("gt_count") or 0) for r in det_rows),
+            "tp": tp,
+            "fp": fp,
+            "tn": tn,
+            "fn": fn,
+            "precision": precision,
+            "recall": recall,
+            "mcc": mcc,
+            "overall_mcc": mcc,
+            "macro_mcc": macro_mcc,
+            "wall_sec": sum(float(r.get("wall_sec") or 0.0) for r in det_rows),
+            "per_scenario": per_scenario,
+        })
+    return out
+
+
+def _best_detector_row(
+    rows: List[Dict[str, Any]],
+    detector_type: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    aggregated = _aggregate_detector_rows(rows)
+    if detector_type:
+        aggregated = [
+            row for row in aggregated
+            if row.get("detector_type") == detector_type
+        ]
+    if not aggregated:
+        return None
+
+    def rank(row: Dict[str, Any]) -> Tuple[Any, ...]:
+        scenario_count = int(row.get("scenario_count") or 0)
+        return (
+            int(row.get("valid_count") or 0) == scenario_count,
+            int(row.get("all_steps_passed_count") or 0) == scenario_count,
+            int(row.get("final_attack_succeeded_count") or 0) == scenario_count,
+            float(row.get("overall_mcc") if row.get("overall_mcc") is not None else -999.0),
+            float(row.get("precision") if row.get("precision") is not None else -1.0),
+            float(row.get("recall") if row.get("recall") is not None else -1.0),
+            -int(row.get("fp") or 0),
+            -int(row.get("fn") or 0),
+        )
+
+    return max(aggregated, key=rank)
+
+
+def write_detector_best_runtime_bundles(
+    rows: List[Dict[str, Any]],
+    *,
+    result_dir: Path = RESULT_DIR,
+    out_root: Path = DETECTOR_ARTIFACT_ROOT,
+    gnn_best_model_dir_fn=_gnn_best_model_dir,
+    rule_dir: Path = RULE_ARTIFACT_DIR,
+) -> Dict[str, Dict[str, Any]]:
+    """Compatibility shim for tests; E0 now writes detection/artifacts."""
+    return save_detector_artifacts_best(
+        rows,
+        result_dir=result_dir,
+        artifact_root=out_root,
+        pidsmaker_artifact_root=PIDSMAKER_ARTIFACT_ROOT,
+        gnn_best_model_dir_fn=gnn_best_model_dir_fn,
+    )
+
+
+def write_best_detector_config(
+    rows: List[Dict[str, Any]],
+    *,
+    result_dir: Path = RESULT_DIR,
+    out_path: Optional[Path] = None,
+    artifact_root: Path = DETECTOR_ARTIFACT_ROOT,
+) -> Optional[Dict[str, Any]]:
+    """Return the best detector summary without writing E0-local config files."""
+    best = _best_detector_row(rows)
+    if best is None:
+        return None
+    doc = {
+        "detector": best["detector"],
+        "metrics": best,
+        "source_experiment": str(result_dir / "summary_orthrus.csv"),
+        "artifact_manifest": str(Path(artifact_root) / "manifest.json"),
+        "gt_source": GT_SOURCE,
+        "marker_visible_to_detector": False,
+        "uses_gt_for_detector_decision": False,
+    }
+    if out_path is not None:
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_path).write_text(json.dumps(doc, indent=2, default=str))
+    return doc
 
 
 def _load_current_signature_doc(signature_path: Path, scenario_id: str) -> Dict[str, Any]:
@@ -515,13 +497,16 @@ def _load_or_collect_attack_signature(
 
 def main(argv: Optional[List[str]] = None) -> None:
     args = parse_args(argv)
+    result_dir = _resolve_output_dir(args.output_dir)
+    test_data_dir = _resolve_output_dir(args.test_data_dir)
     detectors: List[str] = list(args.detectors)
     for d in detectors:
         if d not in DETECTORS:
             raise SystemExit(f"[abort] unknown detector {d}; valid={DETECTORS}")
     assert_detector_artifacts_ready(detectors)
     scenarios = load_scenarios(args.scenarios)
-    RESULT_DIR.mkdir(parents=True, exist_ok=True)
+    result_dir.mkdir(parents=True, exist_ok=True)
+    test_data_dir.mkdir(parents=True, exist_ok=True)
 
     # Reuse detector objects across scenarios so each model loads once.
     oracle_pool: Dict[str, PIDSOracle] = {name: PIDSOracle(name) for name in detectors}
@@ -530,13 +515,15 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     for scenario in scenarios:
         sid = scenario["scenario_id"]
-        scen_dir = RESULT_DIR / sid
-        scen_dir.mkdir(parents=True, exist_ok=True)
+        data_scen_dir = test_data_dir / sid
+        result_scen_dir = result_dir / sid
+        data_scen_dir.mkdir(parents=True, exist_ok=True)
+        result_scen_dir.mkdir(parents=True, exist_ok=True)
         print(f"\n=== scenario: {sid} ===", flush=True)
 
         t0 = time.time()
         try:
-            attack_only_dir = scen_dir / "attack_only"
+            attack_only_dir = data_scen_dir / "attack_only"
             attack_only = _load_or_collect_attack_signature(
                 scenario,
                 attack_only_dir,
@@ -552,7 +539,7 @@ def main(argv: Optional[List[str]] = None) -> None:
                 )
             artifact = e0_collect_scenario(
                 scenario,
-                scen_dir,
+                data_scen_dir,
                 warmup_sec=args.warmup_sec,
                 cooldown_sec=args.cooldown_sec,
                 reset_container_before=True,
@@ -632,21 +619,75 @@ def main(argv: Optional[List[str]] = None) -> None:
                 flush=True,
             )
 
-        (scen_dir / "detector_results.json").write_text(
+        (result_scen_dir / "detector_results.json").write_text(
             json.dumps(detector_results, indent=2, default=str)
         )
-        (scen_dir / "node_evidence.json").write_text(
+        (result_scen_dir / "node_evidence.json").write_text(
             json.dumps(node_evidence, indent=2, default=str)
         )
-        _write_csv(scen_dir / "summary.csv", scen_rows)
+        _write_csv(result_scen_dir / "summary.csv", scen_rows)
 
-    _write_csv(RESULT_DIR / "summary_all.csv", summary_all_rows)
-    _write_orthrus_summary(RESULT_DIR / "summary_orthrus.csv", summary_all_rows)
+    if not summary_all_rows:
+        print(
+            "\n=== E0 produced 0 detector rows; keeping existing summaries and "
+            "skipping detector artifact update ===",
+            flush=True,
+        )
+        return
+
+    _write_csv(result_dir / "summary_all.csv", summary_all_rows)
+    _write_orthrus_summary(result_dir / "summary_orthrus.csv", summary_all_rows)
+    artifact_updates: Dict[str, Dict[str, Any]] = {}
+    if not args.no_runtime_update:
+        artifact_updates = save_detector_artifacts_best(
+            summary_all_rows,
+            result_dir=result_dir,
+        )
     print(
         f"\n=== E0 done: {len(summary_all_rows)} rows -> "
-        f"{RESULT_DIR / 'summary_all.csv'} ===",
+        f"{result_dir / 'summary_all.csv'} ===",
         flush=True,
     )
+    updated = [
+        item for name, item in artifact_updates.items()
+        if name != "_summary" and item.get("updated")
+    ]
+    skipped = [
+        item for name, item in artifact_updates.items()
+        if name != "_summary" and not item.get("updated")
+    ]
+    for item in updated:
+        metrics = item["manifest"]["e0_metrics"]
+        print(
+            f"=== E0 detector artifact updated {item['detector']}: "
+            f"overall_MCC={metrics['overall_mcc']} macro_MCC={metrics['macro_mcc']} "
+            f"Precision={metrics['precision']} Recall={metrics['recall']} "
+            f"-> {item['path']} ===",
+            flush=True,
+        )
+    if skipped:
+        names = ", ".join(str(item["detector"]) for item in skipped)
+        print(
+            f"=== E0 detector artifacts unchanged: {names} ===",
+            flush=True,
+        )
+    summary = artifact_updates.get("_summary", {})
+    global_best = summary.get("global_best") if isinstance(summary, dict) else None
+    if global_best:
+        print(
+            f"=== E0 global best: {global_best} "
+            f"-> {DETECTOR_ARTIFACT_ROOT / 'manifest.json'} ===",
+            flush=True,
+        )
+    best_by_class = summary.get("best_by_class", {}) if isinstance(summary, dict) else {}
+    for detector_type in DETECTOR_CLASSES:
+        detector = best_by_class.get(detector_type)
+        if not detector:
+            continue
+        print(
+            f"=== E0 class best {detector_type}: {detector} ===",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Unit test for GrabnelCMDAttack 主算法(Step 3.7)。
+"""Unit test for SafeMimicCMDAttack 主算法(Step 3.7)。
 
 用 mock query_fn 测试整个 BO 循环不调用真 detector。
 """
@@ -10,7 +10,8 @@ from typing import List
 import numpy as np
 
 from attack.framework import AttackScenario, QueryResult
-from attack.grabnel_cmd import GrabnelConfig, GrabnelCMDAttack
+from attack.framework import SafeMimicConfig
+from attack.safemimic_cmd.search import SafeMimicCMDAttack
 
 
 PROJ_ROOT = Path(__file__).resolve().parent.parent
@@ -39,7 +40,7 @@ class MockQueryFn:
         return QueryResult.valid_(y=y, score_vec=score_vec)
 
 
-class TestGrabnelCMDAttack(unittest.TestCase):
+class TestSafeMimicCMDAttack(unittest.TestCase):
 
     def setUp(self):
         scns = sorted(Path(PROJ_ROOT, "scenarios/juiceshop").glob("*.json"))
@@ -55,8 +56,8 @@ class TestGrabnelCMDAttack(unittest.TestCase):
 
     def test_run_smoke_short(self):
         """跑 B_max=3, T_GA=3, m=4 的短 BO,mock query 第 2 次 evade。"""
-        cfg = GrabnelConfig(B_max=3, T_GA=3, m_pop=4, H=2, D_cap=64, seed=42)
-        algo = GrabnelCMDAttack(cfg)
+        cfg = SafeMimicConfig(B_max=3, T_GA=3, m_pop=4, H=2, D_cap=64, seed=42)
+        algo = SafeMimicCMDAttack(cfg)
         mock = MockQueryFn(flip_at=2, seed=0)
         # 用 fake candidate pool 跑(避免读真文件)
         cand = ["ls", "pwd", "echo hi"]
@@ -69,8 +70,8 @@ class TestGrabnelCMDAttack(unittest.TestCase):
 
     def test_no_evade_runs_full_budget(self):
         """flip_at 设很大 → mock 不让攻击成功 → 跑完 B_max stage。"""
-        cfg = GrabnelConfig(B_max=3, T_GA=2, m_pop=3, H=2, D_cap=32, seed=1)
-        algo = GrabnelCMDAttack(cfg)
+        cfg = SafeMimicConfig(B_max=3, T_GA=2, m_pop=3, H=2, D_cap=32, seed=1)
+        algo = SafeMimicCMDAttack(cfg)
         mock = MockQueryFn(flip_at=999, seed=0)                  # 永不停
         cand = ["ls", "pwd"]
         result = algo.run(self.scenario, cand, mock)

@@ -45,7 +45,7 @@ fi
 # ============================================================================
 # 2. 校验 PIDSMaker 源码可 import(走 sys.path,不 pip install -e)
 # ============================================================================
-# 我们的代码在 detection/pidsmaker.py 等里手动 sys.path.insert(0, PIDSMAKER_DIR),
+# 我们的代码在 detection/training/pidsmaker.py 等里手动 sys.path.insert(0, PIDSMAKER_DIR),
 # 不依赖 site-packages,保证 PIDSMaker 在项目目录下编辑可见而非「外部库」。
 if pip show pidsmaker > /dev/null 2>&1; then
     echo "[setup] WARN: site-packages 里有 pip install 的 pidsmaker,可能跟 sys.path 路径冲突"

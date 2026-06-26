@@ -20,7 +20,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 sys.path.insert(0, PROJECT_ROOT)
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "PIDSMaker"))
 
-ATTACK_DIR = os.path.join(PROJECT_ROOT, "data", "training_traces", "attack")
+ATTACK_DIR = os.path.join(PROJECT_ROOT, "detection", "data", "test_traces", "attack")
 ATTACK_SCENARIOS = [
     "juiceshop_basket_idor",
     "juiceshop_db_schema_union_sqli",
@@ -49,7 +49,7 @@ ATTACK_TO_DATE = {
 
 def _parse_sql_paths(sql_path: str):
     """从 SQL 抽 idx_id → canonical path(跟 PIDSMaker `get_node_to_path_and_type` 对齐)."""
-    from detection.pidsmaker import (
+    from detection.training.pidsmaker import (
         _INSERT_NETFLOW_RE, _INSERT_SUBJECT_RE, _INSERT_FILE_RE,
     )
     with open(sql_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -69,7 +69,7 @@ def _parse_sql_paths(sql_path: str):
 
 def build_inference_graph(det_name: str, sql_path: str):
     """跟 predict_per_node 同一条路径但只到 cdm_to_nx_graph (+ transformation)."""
-    from detection.pidsmaker import (
+    from detection.training.pidsmaker import (
         _build_args, parse_sql_to_events_and_nodes, cdm_to_nx_graph,
     )
     from pidsmaker.config.pipeline import get_yml_cfg
@@ -87,7 +87,7 @@ def build_inference_graph(det_name: str, sql_path: str):
 def load_eval_graph(det_name: str, date: str):
     """读 PIDSMaker construction step 落盘的 nx 图."""
     import torch
-    from detection.pidsmaker import _build_args
+    from detection.training.pidsmaker import _build_args
     from pidsmaker.config.pipeline import get_yml_cfg
 
     args = _build_args(det_name)
@@ -129,8 +129,8 @@ def graph_edge_path_set(graph, idx_to_path):
 
 def get_eval_pkl_y(det_name: str, scenario_idx: int):
     """eval pkl 里这个 scenario GT attack 节点的 path → y_pred."""
-    from detection.pidsmaker import _build_args
-    from detection.pidsmaker import load_eval_pkl
+    from detection.training.pidsmaker import _build_args
+    from detection.training.pidsmaker import load_eval_pkl
     from pidsmaker.config.pipeline import get_yml_cfg
     from pidsmaker.utils.utils import get_node_to_path_and_type
 
@@ -176,7 +176,7 @@ def test_one(det, det_name, scenario_idx, sid):
     if eval_g is None:
         return None
     # eval 图节点 idx_id 是 global ID,反查 path
-    from detection.pidsmaker import _build_args
+    from detection.training.pidsmaker import _build_args
     from pidsmaker.config.pipeline import get_yml_cfg
     from pidsmaker.utils.utils import get_node_to_path_and_type
     cfg = get_yml_cfg(_build_args(det_name))
@@ -214,7 +214,7 @@ def test_one(det, det_name, scenario_idx, sid):
     common_paths = inf_pt & eval_pt  # 为 ① 数字保留
 
     # ④ 结果:跑 predict_per_node 拿 y_pred, 跟 eval pkl 比
-    from detection.pidsmaker import _LocalDetector  # noqa
+    from detection.training.pidsmaker import _LocalDetector  # noqa
     inf_y = {}
     for nd in det.predict_per_node(sql):
         p = idx_to_path.get(nd["node"], "")
@@ -238,7 +238,7 @@ def main(argv):
         "threatrace", "kairos", "magic", "flash",
         "velox", "rcaid", "nodlink", "orthrus",
     ]
-    from detection.pidsmaker import _LocalDetector
+    from detection.training.pidsmaker import _LocalDetector
 
     print("\n" + "=" * 108)
     print("  推理 SQL 流程 vs eval pkl 端到端对齐(节点 + 边 + 特征 + y_pred)")

@@ -6,7 +6,7 @@ Phase 1 模块:
   builder.py      — build_g_from_a0(json) + build_g_from_strace(strace)
   translator.py   — graph_to_shell(G) → List[str]
 
-完全独立于搜索算法;v3 起被 attack/grabnel_cmd/ 调用。
+完全独立于搜索算法;v3 起被 SafeMimic full profile 调用。
 """
 from .graph import CommandGraph, CommandNode
 from .operators import (

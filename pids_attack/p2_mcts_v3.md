@@ -110,7 +110,11 @@ s.t.:    F(G_0) ≠ ∅,  F(G_adv) = ∅,  G_adv = apply(Δ, G_0) ∈ 𝒢      
 - **EvadeDroid** [Bostani et al. CnS'24] §4.2 Eq 1:`argmin |δ|` 形式(本节 Eq 2 `argmin q_used` 参考)。
 
 ---
+---
 
+todo
+
+- 4.定义好优化函数 在这考虑规则怎么办  有改的这种变异方式 欺骗 ids 不被 rule-bas
 ### §5.1 Challenges and Overview
 
 #### Challenges

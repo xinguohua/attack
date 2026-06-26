@@ -2,7 +2,7 @@
 # ===========================
 # Benign trace 编排 Plan(配置驱动,改这个文件 = 改采集行为)
 #
-# 用途:`scripts/run.py detect collect-benign` 读本文件,按其中 daemons + scenarios + 容器/strace
+# 用途:`scripts/run.py detect collect` 读本文件,按其中 daemons + scenarios + 容器/strace
 # 配置驱动一次 30min 采集,产出一条完整 benign strace + /proc 快照 + CDM SQL。
 #
 # 为什么是 yml 不是 hardcode:
@@ -368,10 +368,10 @@ scenarios:
             - "find /etc -maxdepth 1 -type f > /dev/null 2>&1"
         - name: 当前目录所有文件
           candidates:
-            - "find . -type f > /dev/null 2>&1"
+            - "ls -la /tmp > /dev/null 2>&1"
         - name: 隐藏文件
           candidates:
-            - "find . -type f -name \".*\" > /dev/null 2>&1"
+            - "ls -la /etc > /dev/null 2>&1"
         - name: 工具位置
           candidates:
             - "which sh > /dev/null 2>&1"
@@ -505,7 +505,7 @@ attack_collection:
   per_scenario_runs: 1              # 每个 scenario 跑 1 次
   delta_commands: []                # δ 为空(纯 attack)
   delta_positions: []
-  output_dir: detection/data/training_traces/attack/
+  output_dir: detection/data/test_traces/attack/
 
 
 # ============================================================================
@@ -517,7 +517,7 @@ output:
     proc_snapshot: detection/data/training_traces/benign.proc_snapshot
     sql: detection/data/training_traces/benign.sql
   attack:
-    dir: detection/data/training_traces/attack/
+    dir: detection/data/test_traces/attack/
     file_pattern: "{scenario_id}.{strace,proc_snapshot,sql}"
 
 

@@ -42,7 +42,7 @@ def collect_inference_y_preds(det_name: str):
     import torch
     from collections import defaultdict
 
-    from detection.pidsmaker import (
+    from detection.training.pidsmaker import (
         PIDSMakerEngine,
         compute_detector_score,
         _kmeans_top_k_labels,
@@ -133,7 +133,7 @@ def collect_inference_y_preds(det_name: str):
 
 def collect_eval_y_preds(det_name: str):
     """从 eval pkl 拿 (node_id → y_pred) 字典."""
-    from detection.pidsmaker import load_eval_pkl
+    from detection.training.pidsmaker import load_eval_pkl
     data, _ = load_eval_pkl(det_name)
     if data is None:
         return None

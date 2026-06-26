@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 from unittest.mock import patch
 
 PROJ_ROOT = Path(__file__).resolve().parent.parent
-RULES_DIR = PROJ_ROOT / "detection/data/hybrid_rules"
+RULES_DIR = PROJ_ROOT / "detection/artifacts"
 
 
 def _make_sql() -> str:
@@ -33,7 +33,7 @@ VALUES ('file-uuid-1', 'hash-file-1', '/etc/passwd', 3) ON CONFLICT DO NOTHING;
 class TestRuleDetectorOutputsIndexId(unittest.TestCase):
 
     def setUp(self):
-        if not (RULES_DIR / "g1_rule.pkl").exists():
+        if not (RULES_DIR / "g1" / "g1_rule.pkl").exists():
             self.skipTest("g1_rule.pkl 不存在,跳过 — 需要先 run scripts/run.py detect train-rules")
         self.tmp = tempfile.NamedTemporaryFile(suffix=".sql", mode="w", delete=False)
         self.tmp.write(_make_sql())
@@ -45,7 +45,7 @@ class TestRuleDetectorOutputsIndexId(unittest.TestCase):
             self.sql_path.unlink(missing_ok=True)
 
     def test_g1_emits_node_index_id(self):
-        from detection.rules import G1RuleDetector
+        from detection.training.rules import G1RuleDetector
         det = G1RuleDetector()
         out = det.predict_per_node(str(self.sql_path))
         self.assertGreater(len(out), 0)
@@ -57,7 +57,7 @@ class TestRuleDetectorOutputsIndexId(unittest.TestCase):
         self.assertEqual(idxs, [1, 2])
 
     def test_g2_emits_node_index_id(self):
-        from detection.rules import G2RuleDetector
+        from detection.training.rules import G2RuleDetector
         det = G2RuleDetector()
         out = det.predict_per_node(str(self.sql_path))
         self.assertGreater(len(out), 0)
@@ -66,7 +66,7 @@ class TestRuleDetectorOutputsIndexId(unittest.TestCase):
             self.assertNotIn("node", nd)
 
     def test_g1g2_per_node_or_by_index_id(self):
-        from detection.rules import G1G2RuleDetector
+        from detection.training.rules import G1G2RuleDetector
         det = G1G2RuleDetector()
         out = det.predict_per_node(str(self.sql_path))
         self.assertGreater(len(out), 0)
@@ -77,12 +77,26 @@ class TestRuleDetectorOutputsIndexId(unittest.TestCase):
         idxs = sorted(nd["node_index_id"] for nd in out)
         self.assertEqual(idxs, [1, 2])
 
+    def test_g1g2_can_use_g2_only_component(self):
+        from detection.training.rules import G1G2RuleDetector, G2RuleDetector
+
+        g2_only = [
+            {"node_index_id": 10, "y_pred": 1, "score": 1.0, "raw_command": "curl"},
+            {"node_index_id": 11, "y_pred": 0, "score": 0.0, "raw_command": "bash"},
+        ]
+        with patch.object(G2RuleDetector, "predict_per_node", return_value=g2_only):
+            det = G1G2RuleDetector(components=("g2",))
+            out = det.predict_per_node(str(self.sql_path))
+
+        self.assertEqual(det.components, ("g2",))
+        self.assertEqual(out, g2_only)
+
 
 class TestHybridGNNPerNodeOR(unittest.TestCase):
     """HybridGNN 真 per-node OR 单测 — mock GNN + 真 rule。"""
 
     def setUp(self):
-        if not (RULES_DIR / "g1_rule.pkl").exists():
+        if not (RULES_DIR / "g1" / "g1_rule.pkl").exists():
             self.skipTest("g1_rule.pkl 不存在,跳过")
 
     def test_hybrid_per_node_or(self):
@@ -97,7 +111,7 @@ class TestHybridGNNPerNodeOR(unittest.TestCase):
             {"node_index_id": 2, "y_pred": 1, "score": 1.0, "raw_command": "curl"},
         ]
 
-        from detection import rules as rule_detector
+        from detection.training import rules as rule_detector
         with patch.object(rule_detector, "_LocalDetector", create=True), \
              patch.object(rule_detector.G1G2RuleDetector, "predict_per_node",
                            return_value=rule_mock_out):
@@ -115,6 +129,27 @@ class TestHybridGNNPerNodeOR(unittest.TestCase):
         # idx 3: 只 GNN 有,Rule 没;y_pred=0,score=0.2
         self.assertEqual(out_by_idx[3]["y_pred"], 0)
         self.assertAlmostEqual(out_by_idx[3]["score"], 0.2)
+
+    def test_hybrid_carries_rule_components(self):
+        from detection.training import rules as rule_detector
+
+        with patch.object(rule_detector, "_LocalDetector", create=True):
+            det = rule_detector.HybridGNNRuleDetector(
+                base_gnn="magic",
+                rule_components=("g2",),
+            )
+
+        self.assertEqual(det.rule_components, ("g2",))
+        self.assertEqual(det._rule.components, ("g2",))
+
+    def test_factory_uses_g2_only_for_orthrus_hybrid(self):
+        from detection.training import rules as rule_detector
+
+        with patch.object(rule_detector, "_LocalDetector", create=True):
+            det = rule_detector.make_rule_detector("orthrus_g1g2")
+
+        self.assertEqual(det.rule_components, ("g2",))
+        self.assertEqual(det._rule.components, ("g2",))
 
 
 if __name__ == "__main__":

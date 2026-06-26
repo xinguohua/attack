@@ -1,6 +1,6 @@
-"""算法无关的共用基础:AttackAlgorithm ABC + QueryHistory + QueryResult + AttackResult + AttackConfig."""
+"""算法无关的共用基础:AttackAlgorithm ABC + QueryHistory + QueryResult + AttackResult + AttackConfig + SafeMimicConfig."""
 from .base import AttackAlgorithm, AttackScenario, AttackResult
-from .config import AttackConfig
+from .config import AttackConfig, SafeMimicConfig
 from .history import QueryHistory, QueryRecord
 from .result import QueryResult
 
@@ -9,6 +9,7 @@ __all__ = [
     "AttackScenario",
     "AttackResult",
     "AttackConfig",
+    "SafeMimicConfig",
     "QueryHistory",
     "QueryRecord",
     "QueryResult",

@@ -7,9 +7,10 @@ from pathlib import Path
 import numpy as np
 
 from cmd_graph.builder import build_g_from_a0
-from attack.grabnel_cmd.config import GrabnelConfig, AtomicOp
-from attack.grabnel_cmd.surrogate import SparseBLR, wl_feature_vector
-from attack.grabnel_cmd.inner_ga import (
+from attack.framework import SafeMimicConfig
+from attack.safemimic_cmd.operators import AtomicOp
+from attack.safemimic_cmd.surrogate import SparseBLR, wl_feature_vector
+from attack.safemimic_cmd.search.inner_ga import (
     InnerGA, Individual, apply_delta, load_candidate_pool,
 )
 
@@ -34,7 +35,18 @@ def _make_cmd_pool():
         "echo hello > /tmp/x",
         "wc -l /etc/passwd",
         "pwd",
+        "curl -s -o /dev/null http://localhost:3000/",
     ]
+
+
+def _load_scenario_g0_min_edges(min_edges):
+    scns = sorted(Path(PROJ_ROOT, "scenarios/juiceshop").glob("*.json"))
+    for scn in scns:
+        with open(scn) as f:
+            G = build_g_from_a0(json.load(f))
+        if len(G.e_seq) >= min_edges:
+            return G
+    return None
 
 
 class TestInnerGA(unittest.TestCase):
@@ -43,7 +55,7 @@ class TestInnerGA(unittest.TestCase):
         self.G_0 = _load_scenario_g0()
         if self.G_0 is None:
             self.skipTest("no scenario file")
-        self.cfg = GrabnelConfig(
+        self.cfg = SafeMimicConfig(
             T_GA=5, m_pop=6, H=2, D_cap=64,
             seed=42,
         )
@@ -118,6 +130,46 @@ class TestInnerGA(unittest.TestCase):
             else:
                 modes_seen.add("replace")
         self.assertGreater(len(modes_seen), 0)
+
+    def test_operator_set_add_only_samples_only_add(self):
+        cfg = SafeMimicConfig(
+            T_GA=2, m_pop=4, H=2, D_cap=64,
+            seed=7, operator_set="add_only",
+        )
+        ga = InnerGA(cfg, self.blr, self.G_0, self.cmd_pool)
+        op = ga._random_atomic_op([])
+        self.assertIsNotNone(op)
+        self.assertEqual(op.type, "add")
+
+    def test_stateful_operator_primitives_can_be_sampled(self):
+        cfg = SafeMimicConfig(
+            T_GA=2, m_pop=4, H=2, D_cap=64,
+            seed=11, operator_set="all4",
+        )
+        ga = InnerGA(cfg, self.blr, self.G_0, self.cmd_pool)
+        add_op = ga._random_add(self.G_0)
+        self.assertIsNotNone(add_op)
+        G_with_delta, ok = apply_delta([add_op], self.G_0)
+        self.assertTrue(ok)
+
+        rewrite_op = ga._random_rewrite(G_with_delta)
+        self.assertIsNotNone(rewrite_op)
+        self.assertEqual(rewrite_op.type, "rewrite")
+
+        remove_op = ga._random_remove(G_with_delta)
+        self.assertIsNotNone(remove_op)
+        self.assertEqual(remove_op.type, "remove")
+
+        G_move = _load_scenario_g0_min_edges(2)
+        if G_move is None:
+            self.skipTest("no scenario with enough E_seq edges for Move")
+        add_for_move = ga._random_add(G_move)
+        self.assertIsNotNone(add_for_move)
+        G_move_delta, ok = apply_delta([add_for_move], G_move)
+        self.assertTrue(ok)
+        move_op = ga._random_move(G_move_delta)
+        self.assertIsNotNone(move_op)
+        self.assertEqual(move_op.type, "move")
 
 
 if __name__ == "__main__":

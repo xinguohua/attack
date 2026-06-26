@@ -1,11 +1,10 @@
-"""黑盒命令级 PIDS 对抗攻击算法。
+"""黑盒命令级 PIDS 对抗攻击算法 — SafeMimic-CMD。
 
-v3 重构(2026-06-02):
-  - MCTS-CMD 整个砍掉,GRABNEL-CMD 取代(承 p2_mcts_v3.md §5)
-  - attack/framework/ 算法无关基础(AttackAlgorithm ABC + QueryHistory + ...)
-  - attack/grabnel_cmd/ 是唯一算法实现(GRABNEL BO + Inner GA + WL+BLR + LCB)
+  - attack/framework/ 算法无关基础(AttackAlgorithm ABC + QueryHistory + SafeMimicConfig + ...)
+  - attack/safemimic_cmd/ 唯一 paper-facing 攻击框架(按 paper §5 子层分层)
+  - attack/safemimic_cmd/ — SafeMimic-CMD paper-facing implementation.
 
-详见 pids_attack/p3_implementation_plan.md。
+详见 pids_attack/p3_results.md §3.0 finding-driven 6 阶段 gate。
 """
 from .framework import (
     AttackAlgorithm,

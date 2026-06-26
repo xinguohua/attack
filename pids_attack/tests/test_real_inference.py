@@ -30,11 +30,11 @@ _PIDSMAKER_DIR = os.environ.get(
 if _PIDSMAKER_DIR not in sys.path:
     sys.path.insert(0, _PIDSMAKER_DIR)
 
-from detection.pidsmaker import _LocalDetector  # noqa: E402
+from detection.training.pidsmaker import _LocalDetector  # noqa: E402
 
 BENIGN_SQL = os.path.join(PROJECT_ROOT, "detection", "data", "training_traces", "benign.sql")
 ATTACK_SQL = os.path.join(
-    PROJECT_ROOT, "detection", "data", "training_traces", "attack",
+    PROJECT_ROOT, "detection", "data", "test_traces", "attack",
     "juiceshop_login_admin_sqli.strace.sql",
 )
 ALL_8_DETECTORS = [
@@ -46,7 +46,7 @@ ALL_8_DETECTORS = [
 def _have_models() -> bool:
     artifact_dir = os.environ.get(
         "PIDSMAKER_ARTIFACT_DIR",
-        os.path.join(PROJECT_ROOT, "detection", "data", "pidsmaker_artifacts"),
+        os.path.join(PROJECT_ROOT, "detection", "training", "artifacts"),
     )
     base = os.path.join(artifact_dir, "training", "training")
     if not os.path.exists(base):
@@ -114,7 +114,7 @@ class TestRealInference(unittest.TestCase):
         只检查可执行代码(去掉 docstring / 注释)是否还含 lookup 关键字。
         """
         import re
-        from detection import pidsmaker as pidsmaker_inference
+        from detection.training import pidsmaker as pidsmaker_inference
         import inspect
         src = inspect.getsource(pidsmaker_inference)
         # 去掉 module docstring 段(triple-quoted block 开头到第一次 close)
@@ -147,7 +147,7 @@ class TestRealInference(unittest.TestCase):
     def test_4_no_zerorpc_in_local_detector(self):
         """删 daemon 后 _LocalDetector 不应该 import zerorpc。"""
         import inspect
-        from detection.pidsmaker import _LocalDetector as LD
+        from detection.training.pidsmaker import _LocalDetector as LD
         src = inspect.getsource(LD)
         self.assertNotIn("zerorpc", src)
 
@@ -222,7 +222,7 @@ def _make_v2_test(name):
     import torch  # noqa
 
     def t(self):
-        from detection.pidsmaker import (
+        from detection.training.pidsmaker import (
             PIDSMakerEngine, parse_sql_to_events_and_nodes, cdm_to_nx_graph,
             single_graph_to_temporal_data,
         )

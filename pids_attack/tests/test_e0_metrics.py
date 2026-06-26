@@ -1,28 +1,33 @@
 """Unit tests for E0 attack-signature node-level metrics."""
 import csv
 import json
+import pickle
 import tempfile
 import unittest
 from pathlib import Path
 
-from experiments.E0_detection.gt_signature import (
+from experiments.E0_detection.gt import (
     TRACE_MODE,
     SIGNATURE_VERSION,
     collect_signature_window_gt_from_sql,
     build_attack_gt_signature,
     normalize_signature_text,
 )
-from experiments.E0_detection.collector import _parse_step_outputs
+from experiments.E0_detection.collect import _parse_step_outputs
 from experiments.E0_detection.run import (
     DEFAULT_DETECTORS,
     DETECTORS,
     GNN_REQUIRED_ARTIFACTS,
+    RULE_COMPONENTS,
     RULE_REQUIRED_ARTIFACTS,
     _missing_detector_artifacts,
     assert_detector_artifacts_ready,
     _load_or_collect_attack_signature,
+    _best_detector_row,
     _sql_node_catalog,
     _write_orthrus_summary,
+    write_best_detector_config,
+    write_detector_best_runtime_bundles,
     compute_metrics,
 )
 
@@ -43,6 +48,364 @@ class TestE0NodeMetrics(unittest.TestCase):
         )
         self.assertEqual(DEFAULT_DETECTORS, expected)
         self.assertEqual(DETECTORS, expected)
+        self.assertEqual(RULE_COMPONENTS["orthrus_g1g2"], ("g2",))
+        self.assertEqual(RULE_COMPONENTS["threatrace_g1g2"], ("g2",))
+
+    def test_best_detector_row_prefers_valid_high_mcc(self):
+        rows = [
+            {
+                "detector": "magic",
+                "valid": True,
+                "all_steps_passed": True,
+                "final_attack_succeeded": True,
+                "tp": 1,
+                "fp": 10,
+                "tn": 80,
+                "fn": 9,
+            },
+            {
+                "detector": "threatrace",
+                "valid": True,
+                "all_steps_passed": True,
+                "final_attack_succeeded": True,
+                "tp": 8,
+                "fp": 4,
+                "tn": 86,
+                "fn": 2,
+            },
+        ]
+
+        best = _best_detector_row(rows)
+
+        self.assertIsNotNone(best)
+        self.assertEqual(best["detector"], "threatrace")
+        self.assertGreater(best["mcc"], 0)
+
+    def test_best_detector_row_parses_csv_boolean_strings(self):
+        rows = [
+            {
+                "detector": "bad",
+                "valid": "False",
+                "all_steps_passed": "True",
+                "final_attack_succeeded": "True",
+                "tp": "9",
+                "fp": "1",
+                "tn": "90",
+                "fn": "1",
+            },
+            {
+                "detector": "good",
+                "valid": "True",
+                "all_steps_passed": "True",
+                "final_attack_succeeded": "True",
+                "tp": "5",
+                "fp": "2",
+                "tn": "88",
+                "fn": "5",
+            },
+        ]
+
+        best = _best_detector_row(rows)
+
+        self.assertEqual(best["detector"], "good")
+        self.assertEqual(best["valid_count"], 1)
+
+    def test_best_detector_config_records_attack_oracle_fields(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            scen = root / "scenario_a"
+            scen.mkdir()
+            (scen / "node_evidence.json").write_text("{}")
+            (root / "summary_orthrus.csv").write_text("Scenario,System\n")
+            (root / "summary_all.csv").write_text("scenario_id,detector\n")
+            out = root / "best_detector_config.json"
+            rows = [
+                {
+                    "detector": "g1",
+                    "valid": True,
+                    "all_steps_passed": True,
+                    "final_attack_succeeded": True,
+                    "tp": 3,
+                    "fp": 2,
+                    "tn": 90,
+                    "fn": 5,
+                }
+            ]
+
+            doc = write_best_detector_config(rows, result_dir=root, out_path=out)
+
+            self.assertTrue(out.exists())
+            self.assertEqual(doc["detector"], "g1")
+            self.assertEqual(
+                doc["source_experiment"],
+                str(root / "summary_orthrus.csv"),
+            )
+            self.assertIn("artifact_manifest", doc)
+            self.assertIn("mcc", doc["metrics"])
+            self.assertFalse(doc["marker_visible_to_detector"])
+            self.assertFalse(doc["uses_gt_for_detector_decision"])
+
+    def test_best_detector_config_points_to_artifact_manifest(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            scen = root / "scenario_a"
+            scen.mkdir()
+            (scen / "node_evidence.json").write_text("{}")
+            (root / "summary_orthrus.csv").write_text("Scenario,System\n")
+            (root / "summary_all.csv").write_text("scenario_id,detector\n")
+            rows = [
+                {
+                    "detector": "g2",
+                    "valid": True,
+                    "all_steps_passed": True,
+                    "final_attack_succeeded": True,
+                    "tp": 3,
+                    "fp": 1,
+                    "tn": 90,
+                    "fn": 6,
+                    "wall_sec": 0.1,
+                }
+            ]
+
+            doc = write_best_detector_config(
+                rows,
+                result_dir=root,
+                out_path=root / "best_detector_config.json",
+                artifact_root=root / "artifacts",
+            )
+
+            self.assertEqual(
+                json.loads((root / "best_detector_config.json").read_text())["artifact_manifest"],
+                str(root / "artifacts" / "manifest.json"),
+            )
+
+    def test_detector_artifact_manifest_writes_per_detector_contract(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            result_dir = root / "results"
+            result_dir.mkdir()
+            (result_dir / "summary_orthrus.csv").write_text("Scenario,System\n")
+            (result_dir / "summary_all.csv").write_text("scenario_id,detector\n")
+
+            artifact_root = root / "artifacts"
+            (artifact_root / "g1").mkdir(parents=True)
+            (artifact_root / "g2").mkdir(parents=True)
+            with open(artifact_root / "g1" / "g1_rule.pkl", "wb") as f:
+                pickle.dump({"tau_lambda": 0.004, "power_law": {}}, f)
+            with open(artifact_root / "g2" / "g2_rule.pkl", "wb") as f:
+                pickle.dump({"sigma": 0.05, "c_benign": {}}, f)
+
+            rows = [
+                {
+                    "scenario_id": "s1",
+                    "detector": "g1",
+                    "valid": True,
+                    "all_steps_passed": True,
+                    "final_attack_succeeded": True,
+                    "all_nodes_count": 100,
+                    "flagged_count": 60,
+                    "gt_count": 10,
+                    "tp": 2,
+                    "fp": 58,
+                    "tn": 32,
+                    "fn": 8,
+                    "wall_sec": 0.1,
+                },
+                {
+                    "scenario_id": "s1",
+                    "detector": "g2",
+                    "valid": True,
+                    "all_steps_passed": True,
+                    "final_attack_succeeded": True,
+                    "all_nodes_count": 100,
+                    "flagged_count": 8,
+                    "gt_count": 10,
+                    "tp": 6,
+                    "fp": 2,
+                    "tn": 88,
+                    "fn": 4,
+                    "wall_sec": 0.2,
+                },
+                {
+                    "scenario_id": "s2",
+                    "detector": "g2",
+                    "valid": True,
+                    "all_steps_passed": True,
+                    "final_attack_succeeded": True,
+                    "all_nodes_count": 100,
+                    "flagged_count": 7,
+                    "gt_count": 10,
+                    "tp": 5,
+                    "fp": 2,
+                    "tn": 88,
+                    "fn": 5,
+                    "wall_sec": 0.3,
+                },
+            ]
+
+            bundles = write_detector_best_runtime_bundles(
+                rows,
+                result_dir=result_dir,
+                out_root=artifact_root,
+            )
+
+            self.assertIn("g1", bundles)
+            self.assertIn("g2", bundles)
+            self.assertIn("_summary", bundles)
+            self.assertTrue(bundles["g1"]["updated"])
+            self.assertTrue(bundles["g2"]["updated"])
+
+            bundle_dir = artifact_root / "g2"
+            self.assertEqual(
+                sorted(p.name for p in bundle_dir.iterdir()),
+                [
+                    "g2_rule.pkl",
+                    "manifest.json",
+                ],
+            )
+            config = json.loads((bundle_dir / "manifest.json").read_text())
+            self.assertEqual(config["detector"], "g2")
+            self.assertEqual(config["detector_type"], "rule")
+            self.assertEqual(config["rule_components"], ["g2"])
+            self.assertFalse(config["marker_visible_to_detector"])
+
+            metrics = config["e0_metrics"]
+            self.assertEqual(metrics["detector"], "g2")
+            self.assertEqual(metrics["detector_type"], "rule")
+            self.assertIn("overall_mcc", metrics)
+            self.assertIn("macro_mcc", metrics)
+            self.assertEqual(len(metrics["per_scenario"]), 2)
+
+            class_summary = json.loads(
+                (artifact_root / "manifest.json").read_text()
+            )
+            self.assertEqual(
+                class_summary["best_by_class"]["rule"],
+                "g2",
+            )
+
+    def test_detector_artifact_does_not_overwrite_better_history(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            result_dir = root / "results"
+            result_dir.mkdir()
+            (result_dir / "summary_orthrus.csv").write_text("Scenario,System\n")
+            (result_dir / "summary_all.csv").write_text("scenario_id,detector\n")
+
+            artifact_root = root / "artifacts"
+            (artifact_root / "g2").mkdir(parents=True)
+            with open(artifact_root / "g2" / "g2_rule.pkl", "wb") as f:
+                pickle.dump({"sigma": 0.05, "c_benign": {}}, f)
+
+            rows = [{
+                "scenario_id": "s1",
+                "detector": "g2",
+                "valid": True,
+                "all_steps_passed": True,
+                "final_attack_succeeded": True,
+                "all_nodes_count": 100,
+                "flagged_count": 8,
+                "gt_count": 10,
+                "tp": 3,
+                "fp": 5,
+                "tn": 85,
+                "fn": 7,
+                "wall_sec": 0.2,
+            }]
+
+            out_root = artifact_root
+            first = write_detector_best_runtime_bundles(
+                rows,
+                result_dir=result_dir,
+                out_root=out_root,
+            )
+            self.assertTrue(first["g2"]["updated"])
+            manifest_path = out_root / "g2" / "manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            metrics = manifest["e0_metrics"]
+            metrics["overall_mcc"] = 0.99
+            metrics["macro_mcc"] = 0.99
+            manifest["e0_metrics"] = metrics
+            manifest_path.write_text(json.dumps(manifest))
+
+            second = write_detector_best_runtime_bundles(
+                rows,
+                result_dir=result_dir,
+                out_root=out_root,
+            )
+            self.assertFalse(second["g2"]["updated"])
+            self.assertEqual(
+                json.loads(manifest_path.read_text())["e0_metrics"]["overall_mcc"],
+                0.99,
+            )
+
+    def test_hybrid_manifest_inherits_base_threshold_override(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            result_dir = root / "results"
+            result_dir.mkdir()
+            (result_dir / "summary_orthrus.csv").write_text("Scenario,System\n")
+            (result_dir / "summary_all.csv").write_text("scenario_id,detector\n")
+
+            artifact_root = root / "artifacts"
+            base_dir = artifact_root / "threatrace"
+            base_dir.mkdir(parents=True)
+            (base_dir / "manifest.json").write_text(json.dumps({
+                "detector": "threatrace",
+                "detector_type": "gnn",
+                "threshold": {
+                    "method": "threatrace",
+                    "threshold": 1.5,
+                    "inference_threshold": 0.0,
+                    "calibration_source": {"type": "validation_score_floor"},
+                },
+                "e0_metrics": {"overall_mcc": 0.5},
+            }))
+            (artifact_root / "g2").mkdir(parents=True)
+            with open(artifact_root / "g2" / "g2_rule.pkl", "wb") as f:
+                pickle.dump({"sigma": 0.05, "c_benign": {}}, f)
+
+            best = root / "threatrace_best"
+            best.mkdir()
+            for filename in GNN_REQUIRED_ARTIFACTS["threatrace"]:
+                (best / filename).write_text("ok")
+
+            rows = [{
+                "scenario_id": "s1",
+                "detector": "threatrace_g1g2",
+                "valid": True,
+                "all_steps_passed": True,
+                "final_attack_succeeded": True,
+                "all_nodes_count": 100,
+                "flagged_count": 8,
+                "gt_count": 10,
+                "tp": 7,
+                "fp": 1,
+                "tn": 89,
+                "fn": 3,
+                "wall_sec": 0.2,
+            }]
+
+            bundles = write_detector_best_runtime_bundles(
+                rows,
+                result_dir=result_dir,
+                out_root=artifact_root,
+                gnn_best_model_dir_fn=lambda _detector: best,
+            )
+
+            self.assertTrue(bundles["threatrace_g1g2"]["updated"])
+            manifest = json.loads(
+                (artifact_root / "threatrace_g1g2" / "manifest.json").read_text()
+            )
+            self.assertEqual(manifest["threshold"]["inference_threshold"], 0.0)
+            self.assertEqual(
+                manifest["threshold"]["calibration_source"]["type"],
+                "validation_score_floor",
+            )
+            self.assertEqual(
+                manifest["inherits_base_threshold_override"]["base_gnn"],
+                "threatrace",
+            )
 
     def test_missing_gnn_artifact_fails_fast(self):
         with tempfile.TemporaryDirectory() as td:
@@ -65,7 +428,7 @@ class TestE0NodeMetrics(unittest.TestCase):
 
     def test_missing_rule_artifact_fails_fast(self):
         with tempfile.TemporaryDirectory() as td:
-            rule_dir = Path(td) / "hybrid_rules"
+            rule_dir = Path(td) / "artifacts"
             missing = _missing_detector_artifacts(["g1"], rule_dir=rule_dir)
 
             for filename in RULE_REQUIRED_ARTIFACTS:
@@ -82,10 +445,11 @@ class TestE0NodeMetrics(unittest.TestCase):
             for filename in GNN_REQUIRED_ARTIFACTS["magic"]:
                 (best / filename).write_text("ok")
 
-            rule_dir = root / "hybrid_rules"
-            rule_dir.mkdir()
-            for filename in RULE_REQUIRED_ARTIFACTS:
-                (rule_dir / filename).write_text("ok")
+            rule_dir = root / "artifacts"
+            (rule_dir / "g1").mkdir(parents=True)
+            (rule_dir / "g2").mkdir(parents=True)
+            (rule_dir / "g1" / "g1_rule.pkl").write_text("ok")
+            (rule_dir / "g2" / "g2_rule.pkl").write_text("ok")
 
             missing = _missing_detector_artifacts(
                 ["magic_g1g2"],
@@ -111,6 +475,21 @@ INSERT INTO file_node_table (node_uuid, hash_id, path, index_id) VALUES ('f1', '
         f.write(text)
         f.flush()
         return Path(f.name)
+
+    def test_sql_node_catalog_handles_multiline_escaped_subject_command(self):
+        sql_path = self._write_text("""
+INSERT INTO subject_node_table (node_uuid, hash_id, path, cmd, index_id) VALUES ('s3', 'h3', '/usr/bin/bash', 'bash -lc set +e
+RUN_DIR=/tmp/e0_abc123
+if [ -f ''/tmp/x'' ]; then echo ok; fi', 3) ON CONFLICT DO NOTHING;
+""")
+        try:
+            catalog = _sql_node_catalog(sql_path)
+            self.assertIn(3, catalog)
+            self.assertEqual(catalog[3]["node_type"], "subject")
+            self.assertIn("RUN_DIR=/tmp/e0_abc123", catalog[3]["cmd"])
+            self.assertIn("'/tmp/x'", catalog[3]["cmd"])
+        finally:
+            sql_path.unlink(missing_ok=True)
 
     def test_gt_union_intersection_precision_and_mcc(self):
         sql_path = self._write_sql()
@@ -223,6 +602,7 @@ INSERT INTO file_node_table (node_uuid, hash_id, path, index_id) VALUES ('f1', '
             self.assertEqual(rows[0]["FP"], "2")
             self.assertEqual(rows[0]["TN"], "30")
             self.assertEqual(rows[0]["FN"], "4")
+            self.assertAlmostEqual(float(rows[0]["Recall"]), 0.2)
             self.assertEqual(rows[1]["TP"], "5")
         finally:
             out.unlink(missing_ok=True)

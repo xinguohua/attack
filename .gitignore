@@ -9,6 +9,9 @@ __pycache__/
 pids_attack/results/
 
 # Large local model/data artifacts.
+pids_attack/detection/artifacts/
+pids_attack/detection/**/artifacts/
+pids_attack/detection/training/artifacts/
 pids_attack/detection/data/pidsmaker_artifacts/
 pids_attack/detection/data/training_traces/
 pids_attack/detection/data/training_traces.bak.*/
@@ -16,8 +19,22 @@ pids_attack/detection/data/archive/
 pids_attack/detection/data/hybrid_rules/*.pkl
 
 # Experiment generated outputs.
+pids_attack/experiments/E0_detection/results/
+pids_attack/experiments/E0_detection/test_data/
 pids_attack/experiments/E0_detection/results_window/
 pids_attack/experiments/E1_operators/proofs_results/
+pids_attack/experiments/E1_operators.archive_20260624/
+pids_attack/experiments/E1_ablation/archive_old_7cell/
+pids_attack/experiments/E1_ablation/*/results/
+pids_attack/experiments/E1_ablation/figures/
+pids_attack/experiments/E1_ablation/logs/
+pids_attack/experiments/E1_ablation/snapshots/
+pids_attack/experiments/E1_ablation/progress.md
+pids_attack/experiments/E2_attack/*/results/
+pids_attack/experiments/E2_attack/figures/
+pids_attack/experiments/E2_attack/logs/
+pids_attack/experiments/E2_attack/snapshots/
+pids_attack/experiments/E2_attack/progress.md
 pids_attack/experiments/E2_ablation/*/results/
 pids_attack/experiments/E2_ablation/figures/
 pids_attack/experiments/E2_ablation/logs/
@@ -27,6 +44,9 @@ pids_attack/experiments/E3_attack/*/results/
 pids_attack/experiments/E3_attack/figures/
 pids_attack/experiments/E3_attack/logs/
 pids_attack/experiments/E3_attack/snapshots/
+
+# Local historical notes kept outside the active code path.
+pids_attack/p3_implementation_plan.archive_pre_refactor.md
 
 # Guard against accidentally creating nested project copies under experiments.
 pids_attack/experiments/*/pids_attack/

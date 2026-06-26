@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "PIDSMaker"))
 def run_one(det_name: str):
     import torch
     import glob
-    from detection.pidsmaker import (
+    from detection.training.pidsmaker import (
         PIDSMakerEngine, single_graph_to_temporal_data,
     )
     from pidsmaker.tasks.batching import get_preprocessed_graphs
